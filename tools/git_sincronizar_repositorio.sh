@@ -128,7 +128,11 @@ mf_git_aplicar_token_remote() {
   fi
 
   tok_enc=$(mf_git_urlencode "$token")
-  new_url="https://${tok_enc}@${path_repo}"
+  if mf_git_url_https_github "https://${path_repo}"; then
+    new_url="https://x-access-token:${tok_enc}@${path_repo}"
+  else
+    new_url="https://${tok_enc}@${path_repo}"
+  fi
 
   if git -c "safe.directory=${app_root}" -C "${app_root}" remote set-url origin "$new_url"; then
     return 0

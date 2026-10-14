@@ -4221,13 +4221,19 @@ questoes_variaveis_base() {
   printf "${WHITE} >> Passo a Passo para gerar o seu TOKEN no link ${BLUE}https://bit.ly/token-github ${WHITE} \n"
   echo
   read -p "> " github_token
+  github_token=$(printf '%s' "${github_token}" | tr -d '\r\n ' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
   echo
   # DEFINE LINK REPO GITHUB
   banner
   printf "${WHITE} >> Digite a URL do repositório Git [padrão: https://github.com/alansuporteamanda/AMANDA.git]: \n"
   echo
   read -p "> " repo_url
+  repo_url=$(printf '%s' "${repo_url}" | tr -d '\r\n ' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
   repo_url="${repo_url:-https://github.com/alansuporteamanda/AMANDA.git}"
+  repo_url="${repo_url%/}"
+  if [[ "${repo_url}" =~ ^https?:// ]] && [[ "${repo_url}" != *.git ]]; then
+    repo_url="${repo_url}.git"
+  fi
   echo
   
   # Validar que a URL parece ser um repositório Git válido (aceita qualquer repo: GitHub, GitLab, etc.)
@@ -5342,14 +5348,21 @@ validar_token_git_clone() {
   local token="${1:-$github_token}"
   local mostrar_erro="${2:-0}"
   local repo_alvo="${3:-${repo_url:-}}"
+  token=$(printf '%s' "${token}" | tr -d '\r\n ' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
   [ -z "$token" ] && return 1
   local url_base
   url_base=$(echo "${repo_alvo}" | sed 's|^https://||' | sed 's|^http://||' | sed 's|^[^@]*@||')
+  url_base="${url_base%/}"
   [ -z "$url_base" ] && return 1
   [[ "$url_base" != *.git ]] && url_base="${url_base}.git"
   local token_encoded
   token_encoded=$(codifica_clone_base "$token")
-  local repo_url_com_token="https://${token_encoded}@${url_base}"
+  local repo_url_com_token
+  if echo "$url_base" | grep -Eqi 'github\.com'; then
+    repo_url_com_token="https://x-access-token:${token_encoded}@${url_base}"
+  else
+    repo_url_com_token="https://${token_encoded}@${url_base}"
+  fi
   export GIT_TERMINAL_PROMPT=0
 
   # 1) Tentar git ls-remote (leve, só testa acesso)
@@ -5482,10 +5495,16 @@ validar_e_atualizar_token_antes_atualizar() {
   cp "$git_config" "${git_config}.backup.$(date +%Y%m%d_%H%M%S)"
   local path_repo
   path_repo=$(echo "$repo_validacao" | sed 's|^https://||' | sed 's|^http://||' | sed 's|^[^@]*@||')
+  path_repo="${path_repo%/}"
   [[ "$path_repo" != *.git ]] && path_repo="${path_repo}.git"
   local novo_token_encoded
   novo_token_encoded=$(codifica_clone_base "$novo_token")
-  local nova_url="https://${novo_token_encoded}@${path_repo}"
+  local nova_url
+  if echo "$path_repo" | grep -Eqi 'github\.com'; then
+    nova_url="https://x-access-token:${novo_token_encoded}@${path_repo}"
+  else
+    nova_url="https://${novo_token_encoded}@${path_repo}"
+  fi
   local nova_url_sed="${nova_url//&/\\&}"
   sed -i "s|^[[:space:]]*url[[:space:]]*=.*|  url = ${nova_url_sed}|" "$git_config"
   printf "${GREEN} >> Token e URL atualizados em: ${git_config}${WHITE}\n"
@@ -5683,24 +5702,46 @@ baixa_codigo_base() {
       exit 1
     fi
 
+    local repo_alvo="${repo_url%/}"
+    [[ "$repo_alvo" != *.git ]] && repo_alvo="${repo_alvo}.git"
+    local repo_limpo
+    repo_limpo=$(echo "${repo_alvo}" | sed -E 's#^(https?://)[^/@]+@#\1#')
+
     if [ -n "${github_token}" ]; then
       github_token_encoded=$(codifica_clone_base "${github_token}")
-      github_url=$(echo ${repo_url} | sed "s|https://|https://${github_token_encoded}@|")
+      local url_sem_https="${repo_limpo#https://}"
+      if echo "${url_sem_https}" | grep -Eqi 'github\.com'; then
+        github_url="https://x-access-token:${github_token_encoded}@${url_sem_https}"
+      else
+        github_url="https://${github_token_encoded}@${url_sem_https}"
+      fi
     else
-      github_url="${repo_url}"
+      github_url="${repo_limpo}"
     fi
 
     dest_dir="/home/deploy/${empresa}/"
 
     if [ -d "${dest_dir}/.git" ]; then
       printf "${GREEN} >> Repositório já presente em ${dest_dir}. Sincronizando alterações...${WHITE}\n"
-      cd "${dest_dir}" && git fetch --all --prune 2>/dev/null || true
+      cd "${dest_dir}" && GIT_TERMINAL_PROMPT=0 git fetch --all --prune 2>/dev/null || true
     else
       mkdir -p "${dest_dir}"
-      git clone ${github_url} ${dest_dir}
+      GIT_TERMINAL_PROMPT=0 git clone "${github_url}" "${dest_dir}"
       if [ $? -ne 0 ]; then
-        printf "${WHITE} >> Falha ao baixar o código! Verifique as informações fornecidas...\n"
         echo
+        printf "${RED}══════════════════════════════════════════════════════════════════${WHITE}\n"
+        printf "${RED}❌ ERRO: Falha ao baixar o código do repositório!${WHITE}\n"
+        printf "${YELLOW}   Repositório: ${BLUE}${repo_limpo}${WHITE}\n"
+        if [ -n "${github_token}" ]; then
+          printf "${YELLOW}   O Token fornecido não possui permissão ou o repositório não existe.${WHITE}\n"
+          printf "${YELLOW}   No GitHub, verifique se o Token tem permissão de LEITURA:${WHITE}\n"
+          printf "${BLUE}   Repository permissions -> Contents -> Access: Read-only${WHITE}\n"
+        else
+          printf "${YELLOW}   O repositório é privado? Se for, informe o Token de Acesso Pessoal.${WHITE}\n"
+        fi
+        printf "${RED}══════════════════════════════════════════════════════════════════${WHITE}\n"
+        echo
+        sleep 5
         exit 1
       fi
     fi
@@ -9056,9 +9097,12 @@ mf_opcao30_validar_token() {
 
   [ -z "$token" ] || [ -z "$repo_ref" ] && return 1
   repo_host=$(echo "$repo_ref" | sed 's|^https://||' | sed 's|^http://||' | sed 's|^[^@]*@||')
-  [[ "$repo_host" != *.git ]] && repo_host="${repo_host}.git"
   token_encoded=$(codifica_clone_base "$token")
-  url="https://${token_encoded}@${repo_host}"
+  if echo "$repo_host" | grep -Eqi 'github\.com'; then
+    url="https://x-access-token:${token_encoded}@${repo_host}"
+  else
+    url="https://${token_encoded}@${repo_host}"
+  fi
   export GIT_TERMINAL_PROMPT=0
   export GIT_ASKPASS=true
 
