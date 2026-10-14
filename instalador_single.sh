@@ -670,6 +670,110 @@ gerenciar_urls_sistema() {
 }
 
 # ================================================================
+# GARANTIR DOCKER E DOCKER COMPOSE AUTOMÁTICO (UBUNTU / DEBIAN)
+# ================================================================
+garantir_docker_e_compose() {
+  banner
+  printf "${PURPLE} >> Verificando e garantindo ambiente Docker e Docker Compose...${WHITE}\n"
+  echo
+
+  # 1. Se docker e docker compose já estiverem operacionais, apenas confirma
+  if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
+    printf "${GREEN} >> Docker e Docker Compose já estão instalados e operacionais!${WHITE}\n"
+    id -u deploy >/dev/null 2>&1 && usermod -aG docker deploy 2>/dev/null || true
+    sleep 1
+    return 0
+  fi
+
+  # 2. Liberar possíveis travas do APT/DPKG (comum em VPS recém iniciadas)
+  local max_wait=20
+  local wait_count=0
+  while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 || fuser /var/lib/apt/lists/lock >/dev/null 2>&1; do
+    if [ $wait_count -eq 0 ]; then
+      printf "${YELLOW} >> Aguardando liberação do gerenciador de pacotes apt/dpkg...${WHITE}\n"
+    fi
+    sleep 2
+    wait_count=$((wait_count + 1))
+    if [ $wait_count -ge $max_wait ]; then
+      killall apt apt-get unattended-upgrades 2>/dev/null || true
+      sleep 1
+      rm -f /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock /var/lib/apt/lists/lock 2>/dev/null || true
+      dpkg --configure -a 2>/dev/null || true
+      break
+    fi
+  done
+
+  # 3. Instalar dependências essenciais
+  export DEBIAN_FRONTEND=noninteractive
+  apt-get update -y >/dev/null 2>&1 || true
+  apt-get install -y ca-certificates curl gnupg lsb-release iptables git python3 >/dev/null 2>&1 || true
+
+  # 4. Instalar Docker se ausente ou daemon inativo
+  if ! command -v docker >/dev/null 2>&1 || ! docker info >/dev/null 2>&1; then
+    printf "${PURPLE} >> Instalando Docker Engine Oficial...${WHITE}\n"
+    if ! curl -fsSL https://get.docker.com | sh; then
+      printf "${YELLOW} >> Tentando instalação do Docker via repositório da distribuição...${WHITE}\n"
+      apt-get update -y
+      apt-get install -y docker.io containerd
+    fi
+    systemctl daemon-reload 2>/dev/null || true
+    systemctl enable docker 2>/dev/null || true
+    systemctl restart docker 2>/dev/null || true
+
+    local docker_wait=0
+    while [ $docker_wait -lt 15 ]; do
+      docker info >/dev/null 2>&1 && break
+      sleep 1
+      docker_wait=$((docker_wait + 1))
+    done
+  fi
+
+  if ! docker info >/dev/null 2>&1; then
+    systemctl start docker 2>/dev/null || service docker start 2>/dev/null || true
+    sleep 2
+  fi
+
+  # 5. Instalar Docker Compose (v2 plugin e CLI)
+  if ! docker compose version >/dev/null 2>&1; then
+    printf "${PURPLE} >> Instalando Docker Compose Plugin...${WHITE}\n"
+    apt-get update -y >/dev/null 2>&1 || true
+    apt-get install -y docker-compose-plugin docker-compose-v2 >/dev/null 2>&1 || true
+  fi
+
+  # Fallback definitivo: baixar binário oficial estático se o APT não supriu
+  if ! docker compose version >/dev/null 2>&1; then
+    printf "${PURPLE} >> Baixando binário oficial estático do Docker Compose Standalone...${WHITE}\n"
+    local raw_arch
+    raw_arch=$(dpkg --print-architecture 2>/dev/null || uname -m)
+    local compose_arch="x86_64"
+    case "$raw_arch" in
+      aarch64|arm64) compose_arch="aarch64" ;;
+      armv7l|armhf)  compose_arch="armv7" ;;
+      *)             compose_arch="x86_64" ;;
+    esac
+
+    mkdir -p /usr/local/lib/docker/cli-plugins /usr/local/bin
+    if curl -fsSL "https://github.com/docker/compose/releases/download/v2.29.7/docker-compose-linux-${compose_arch}" -o /usr/local/lib/docker/cli-plugins/docker-compose 2>/dev/null || \
+       curl -fsSL "https://github.com/docker/compose/releases/latest/download/docker-compose-linux-${compose_arch}" -o /usr/local/lib/docker/cli-plugins/docker-compose 2>/dev/null; then
+      chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+      ln -sf /usr/local/lib/docker/cli-plugins/docker-compose /usr/local/bin/docker-compose
+    fi
+  fi
+
+  # 6. Adicionar usuário deploy ao grupo docker
+  if id -u deploy >/dev/null 2>&1; then
+    usermod -aG docker deploy 2>/dev/null || true
+  fi
+
+  if docker info >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
+    printf "${GREEN} >> Docker e Docker Compose prontos e validados com sucesso!${WHITE}\n"
+  else
+    printf "${RED} >> AVISO: Não foi possível validar o Docker/Compose completamente.${WHITE}\n"
+  fi
+  sleep 1
+}
+
+# ================================================================
 # INSTALAÇÃO COMPLETA AMANDA VIA DOCKER COMPOSE (TODAS AS APIs)
 # ================================================================
 instalar_amanda_docker_stack() {
@@ -692,22 +796,8 @@ instalar_amanda_docker_stack() {
   config_timezone_base || trata_erro "config_timezone_base"
   config_firewall_base || trata_erro "config_firewall_base"
 
-  # Garantir Docker e Docker Compose instalados
-  banner
-  printf "${WHITE} >> Verificando e instalando ambiente Docker...\n"
-  echo
-  local script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  if [ -f "${script_dir}/tools/instalar_docker_compartilhado.sh" ]; then
-    # shellcheck source=/dev/null
-    source "${script_dir}/tools/instalar_docker_compartilhado.sh"
-    instalar_docker_compartilhado
-  fi
-  if ! command -v docker >/dev/null 2>&1 || ! docker info >/dev/null 2>&1; then
-    curl -fsSL https://get.docker.com | sh
-    systemctl enable docker
-    systemctl start docker
-    sleep 2
-  fi
+  # Garantir Docker e Docker Compose instalados e 100% operacionais automaticamente
+  garantir_docker_e_compose
 
   # Instalar Git e baixar o repositório
   instala_git_base || trata_erro "instala_git_base"
@@ -898,6 +988,13 @@ PYEOF
   printf "${YELLOW} >> Esse processo pode levar alguns minutos (download de imagens e build dos serviços)...\n"
   echo
   cd "${compose_dir}" || trata_erro "cd para compose_dir"
+
+  # Validação de integridade do arquivo Compose antes de subir
+  if ! docker compose -p amanda config >/dev/null 2>&1; then
+    printf "${YELLOW} >> Detectada divergência no docker-compose.yml. Restaurando compose limpo do repositório...${WHITE}\n"
+    git checkout -f docker-compose.yml 2>/dev/null || true
+  fi
+
   docker compose -p amanda down 2>/dev/null || true
   if ! docker compose -p amanda up -d --build; then
     printf "${RED}══════════════════════════════════════════════════════════════════${WHITE}\n"
@@ -1040,8 +1137,12 @@ atualizar_amanda_docker() {
 
   cd "${app_dir}" || cd "${compose_dir}" || trata_erro "cd para diretorio da instalacao"
   git fetch origin main --prune 2>/dev/null || true
-  git checkout main 2>/dev/null || true
-  git pull origin main 2>/dev/null || true
+  git checkout -f 2>/dev/null || true
+  git reset --hard 2>/dev/null || true
+  git clean -fd 2>/dev/null || true
+  git checkout -B main origin/main 2>/dev/null || true
+  git reset --hard origin/main
+  git clean -fd 2>/dev/null || true
 
   banner
   printf "${PURPLE} >> Reconstruindo e reiniciando todos os contêineres da AMANDA...${WHITE}\n"
@@ -1066,6 +1167,12 @@ content = re.sub(
 with open(compose_file, "w", encoding="utf-8") as f:
     f.write(content)
 PYEOF
+  fi
+
+  # Validação de integridade do Compose antes do build
+  if ! docker compose -p amanda config >/dev/null 2>&1; then
+    printf "${YELLOW} >> Detectada anomalia no docker-compose.yml. Restaurando compose original do repositório...${WHITE}\n"
+    git checkout -f docker-compose.yml 2>/dev/null || true
   fi
 
   docker compose -p amanda pull 2>/dev/null || true
@@ -5913,6 +6020,9 @@ baixa_codigo_base() {
     if [ -d "${dest_dir}/.git" ]; then
       printf "${GREEN} >> Repositório já presente em ${dest_dir}. Sincronizando alterações...${WHITE}\n"
       cd "${dest_dir}" && GIT_TERMINAL_PROMPT=0 git fetch --all --prune 2>/dev/null || true
+      git checkout -f 2>/dev/null || true
+      git reset --hard 2>/dev/null || true
+      git clean -fd 2>/dev/null || true
     else
       if [ -d "${dest_dir}" ] && [ -n "$(ls -A "${dest_dir}" 2>/dev/null)" ]; then
         printf "${YELLOW} >> Diretório ${dest_dir} existente sem repositório Git. Limpando para clone novo...${WHITE}\n"
@@ -5947,22 +6057,31 @@ baixa_codigo_base() {
       
       cd ${dest_dir} || trata_erro "cd para diretório do projeto"
       
-      # Fazer checkout para a branch principal (prioridade: main > master > MULTI100-OFICIAL-u21)
+      # Fazer checkout para a branch principal (prioridade: main > davi-alteraçoes > master)
       sudo su - deploy <<CHECKOUTRECENT
 cd ${dest_dir}
 git fetch --all --prune 2>/dev/null || true
 
-# Tentar fazer checkout para a branch principal
+# Limpar qualquer modificação residual anterior
+git checkout -f 2>/dev/null || true
+git reset --hard 2>/dev/null || true
+git clean -fd 2>/dev/null || true
+
+# Tentar fazer checkout e reset para a branch limpa
 if git show-ref --verify --quiet refs/remotes/origin/main; then
-  git checkout main 2>/dev/null || git checkout -b main origin/main
-  git pull origin main 2>/dev/null || true
+  git checkout -B main origin/main 2>/dev/null || git checkout main 2>/dev/null || true
+  git reset --hard origin/main
+elif git show-ref --verify --quiet refs/remotes/origin/davi-alteraçoes; then
+  git checkout -B davi-alteraçoes origin/davi-alteraçoes 2>/dev/null || true
+  git reset --hard origin/davi-alteraçoes
 elif git show-ref --verify --quiet refs/remotes/origin/master; then
-  git checkout master 2>/dev/null || git checkout -b master origin/master
-  git pull origin master 2>/dev/null || true
+  git checkout -B master origin/master 2>/dev/null || git checkout master 2>/dev/null || true
+  git reset --hard origin/master
 elif git show-ref --verify --quiet refs/remotes/origin/MULTI100-OFICIAL-u21; then
-  git checkout MULTI100-OFICIAL-u21 2>/dev/null || git checkout -b MULTI100-OFICIAL-u21 origin/MULTI100-OFICIAL-u21
-  git pull origin MULTI100-OFICIAL-u21 2>/dev/null || true
+  git checkout -B MULTI100-OFICIAL-u21 origin/MULTI100-OFICIAL-u21 2>/dev/null || true
+  git reset --hard origin/MULTI100-OFICIAL-u21
 fi
+git clean -fd 2>/dev/null || true
 CHECKOUTRECENT
       
       printf "${GREEN} >> Versão mais recente do repositório será instalada${WHITE}\n"
