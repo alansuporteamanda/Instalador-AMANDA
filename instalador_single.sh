@@ -190,8 +190,11 @@ salvar_variaveis() {
   echo "github_token=${github_token}" >>$ARQUIVO_VARIAVEIS
   echo "repo_url=${repo_url}" >>$ARQUIVO_VARIAVEIS
   echo "proxy=${proxy}" >>$ARQUIVO_VARIAVEIS
-  echo "backend_port=${backend_port}" >>$ARQUIVO_VARIAVEIS
-  echo "frontend_port=${frontend_port}" >>$ARQUIVO_VARIAVEIS
+  echo "backend_port=${backend_port:-8080}" >>$ARQUIVO_VARIAVEIS
+  echo "frontend_port=${frontend_port:-3000}" >>$ARQUIVO_VARIAVEIS
+  echo "db_port=${db_port:-5432}" >>$ARQUIVO_VARIAVEIS
+  echo "redis_port=${redis_port:-6379}" >>$ARQUIVO_VARIAVEIS
+  echo "pgbouncer_port=${pgbouncer_port:-6432}" >>$ARQUIVO_VARIAVEIS
   # Salvar versão (usar underscore se for "Mais Recente" para evitar problemas com espaços)
   local versao_para_salvar="${versao_instalacao}"
   if [ "${versao_instalacao}" = "Mais Recente" ] || [ "${versao_instalacao}" = "Mais_Recente" ]; then
@@ -214,10 +217,16 @@ carregar_variaveis() {
     empresa="${empresa:-amanda}"
     nome_titulo="${nome_titulo:-AMANDA}"
     INSTALACAO_SEM_DOMINIO="${INSTALACAO_SEM_DOMINIO:-0}"
+    db_port="${db_port:-5432}"
+    redis_port="${redis_port:-6379}"
+    pgbouncer_port="${pgbouncer_port:-6432}"
   else
     empresa="amanda"
     nome_titulo="AMANDA"
     INSTALACAO_SEM_DOMINIO="0"
+    db_port="5432"
+    redis_port="6379"
+    pgbouncer_port="6432"
   fi
 }
 
@@ -777,19 +786,27 @@ garantir_docker_e_compose() {
 # LIBERAR PORTAS E DESATIVAR SERVIÇOS NATIVOS CONFLITANTES NO HOST
 # ================================================================
 liberar_portas_e_servicos_host() {
-  printf "${PURPLE} >> Verificando e liberando portas e serviços conflitantes no host...${WHITE}\n"
+  local target_db="${db_port:-5432}"
+  local target_redis="${redis_port:-6379}"
+  local target_pgb="${pgbouncer_port:-6432}"
 
-  # 1. Desativar serviços nativos da VPS que concorrem com a Stack 100% Docker
-  local srv
-  for srv in postgresql redis-server redis pgbouncer; do
-    if systemctl is-active --quiet "$srv" 2>/dev/null || service "$srv" status >/dev/null 2>&1; then
-      printf "${YELLOW} >> Desativando serviço nativo host '%s' (libera porta e RAM para o Docker)...${WHITE}\n" "$srv"
-      systemctl stop "$srv" 2>/dev/null || service "$srv" stop 2>/dev/null || true
-      systemctl disable "$srv" 2>/dev/null || true
-    fi
-  done
+  printf "${PURPLE} >> Verificando portas configuradas (Postgres: ${target_db}, Redis: ${target_redis}, PgBouncer: ${target_pgb})...${WHITE}\n"
 
-  # 2. Remover contêineres órfãos/travados em conflito de nome ou porta
+  # 1. Se a porta configurada para o Postgres for 5432 e houver serviço nativo rodando, desativa para não conflitar
+  if [ "$target_db" = "5432" ] && (systemctl is-active --quiet postgresql 2>/dev/null || service postgresql status >/dev/null 2>&1); then
+    printf "${YELLOW} >> Porta host do PostgreSQL é 5432 e há serviço nativo ativo. Desativando postgresql nativo para liberar porta...${WHITE}\n"
+    systemctl stop postgresql 2>/dev/null || service postgresql stop 2>/dev/null || true
+    systemctl disable postgresql 2>/dev/null || true
+  fi
+
+  # 2. Se a porta configurada para o Redis for 6379 e houver serviço nativo rodando, desativa para não conflitar
+  if [ "$target_redis" = "6379" ] && (systemctl is-active --quiet redis-server 2>/dev/null || service redis-server status >/dev/null 2>&1); then
+    printf "${YELLOW} >> Porta host do Redis é 6379 e há serviço nativo ativo. Desativando redis-server nativo...${WHITE}\n"
+    systemctl stop redis-server 2>/dev/null || service redis-server stop 2>/dev/null || true
+    systemctl disable redis-server 2>/dev/null || true
+  fi
+
+  # 3. Remover contêineres órfãos/travados em conflito de nome ou porta
   local c
   for c in amanda_postgres amanda_redis amanda_pgbouncer amanda_backend amanda_frontend amanda_apioficial amanda_wuzapi amanda_campaign_dispatcher amanda_transcricao; do
     if docker ps -a --format '{{.Names}}' | grep -qw "$c"; then
@@ -797,7 +814,7 @@ liberar_portas_e_servicos_host() {
     fi
   done
 
-  # 3. Testador universal de porta TCP ocupada no host
+  # 4. Testador universal de porta TCP ocupada no host
   testar_porta_tcp_ocupada() {
     local p="$1"
     if command -v ss >/dev/null 2>&1; then
@@ -811,17 +828,17 @@ liberar_portas_e_servicos_host() {
     return 1
   }
 
-  # 4. Tentar finalizar processos residuais nas portas críticas (5432, 6379, 6432)
+  # 5. Tentar finalizar processos residuais nas portas configuradas caso estejam ocupadas
   local p
-  for p in 5432 6379 6432; do
+  for p in "$target_db" "$target_redis" "$target_pgb"; do
     if testar_porta_tcp_ocupada "$p"; then
-      printf "${YELLOW} >> Porta %s ocupada por processo residual. Tentando liberar...${WHITE}\n" "$p"
+      printf "${YELLOW} >> Porta host %s ocupada por processo residual. Tentando liberar...${WHITE}\n" "$p"
       fuser -k "${p}/tcp" 2>/dev/null || true
       sleep 1
     fi
   done
 
-  # 5. Localizador dinâmico de porta livre para evitar conflitos fatais de bind
+  # 6. Localizador dinâmico de porta livre para evitar conflitos fatais de bind
   localizador_porta_livre() {
     local candidata="$1"
     while testar_porta_tcp_ocupada "$candidata"; do
@@ -830,22 +847,24 @@ liberar_portas_e_servicos_host() {
     printf '%s\n' "$candidata"
   }
 
-  PORT_DB_RESOLVIDA=$(localizador_porta_livre 5432)
-  PORT_REDIS_RESOLVIDA=$(localizador_porta_livre 6379)
-  PORT_PGBOUNCER_RESOLVIDA=$(localizador_porta_livre 6432)
+  PORT_DB_RESOLVIDA=$(localizador_porta_livre "$target_db")
+  PORT_REDIS_RESOLVIDA=$(localizador_porta_livre "$target_redis")
+  PORT_PGBOUNCER_RESOLVIDA=$(localizador_porta_livre "$target_pgb")
 
-  export PORT_DB_RESOLVIDA
-  export PORT_REDIS_RESOLVIDA
-  export PORT_PGBOUNCER_RESOLVIDA
+  db_port="$PORT_DB_RESOLVIDA"
+  redis_port="$PORT_REDIS_RESOLVIDA"
+  pgbouncer_port="$PORT_PGBOUNCER_RESOLVIDA"
 
-  if [ "$PORT_DB_RESOLVIDA" != "5432" ]; then
-    printf "${YELLOW} >> AVISO: Porta host 5432 ocupada. Postgres mapeado na porta host ${PORT_DB_RESOLVIDA}.${WHITE}\n"
+  export PORT_DB_RESOLVIDA PORT_REDIS_RESOLVIDA PORT_PGBOUNCER_RESOLVIDA db_port redis_port pgbouncer_port
+
+  if [ "$PORT_DB_RESOLVIDA" != "$target_db" ]; then
+    printf "${YELLOW} >> AVISO: Porta host %s ocupada. Postgres mapeado na porta host ${PORT_DB_RESOLVIDA}.${WHITE}\n" "$target_db"
   fi
-  if [ "$PORT_REDIS_RESOLVIDA" != "6379" ]; then
-    printf "${YELLOW} >> AVISO: Porta host 6379 ocupada. Redis mapeado na porta host ${PORT_REDIS_RESOLVIDA}.${WHITE}\n"
+  if [ "$PORT_REDIS_RESOLVIDA" != "$target_redis" ]; then
+    printf "${YELLOW} >> AVISO: Porta host %s ocupada. Redis mapeado na porta host ${PORT_REDIS_RESOLVIDA}.${WHITE}\n" "$target_redis"
   fi
-  if [ "$PORT_PGBOUNCER_RESOLVIDA" != "6432" ]; then
-    printf "${YELLOW} >> AVISO: Porta host 6432 ocupada. PgBouncer mapeado na porta host ${PORT_PGBOUNCER_RESOLVIDA}.${WHITE}\n"
+  if [ "$PORT_PGBOUNCER_RESOLVIDA" != "$target_pgb" ]; then
+    printf "${YELLOW} >> AVISO: Porta host %s ocupada. PgBouncer mapeado na porta host ${PORT_PGBOUNCER_RESOLVIDA}.${WHITE}\n" "$target_pgb"
   fi
 }
 
@@ -906,9 +925,9 @@ URL_API_OFICIAL=${subdominio_oficial}
 PORT_BACKEND=${backend_port:-8080}
 PORT_FRONTEND=${frontend_port:-3000}
 PORT_APIOFICIAL=6000
-PORT_DB=${PORT_DB_RESOLVIDA:-5432}
-PORT_PGBOUNCER=${PORT_PGBOUNCER_RESOLVIDA:-6432}
-PORT_REDIS=${PORT_REDIS_RESOLVIDA:-6379}
+PORT_DB=${db_port:-${PORT_DB_RESOLVIDA:-5432}}
+PORT_PGBOUNCER=${pgbouncer_port:-${PORT_PGBOUNCER_RESOLVIDA:-6432}}
+PORT_REDIS=${redis_port:-${PORT_REDIS_RESOLVIDA:-6379}}
 PORT_WUZAPI=8090
 PORT_DISPATCHER=8095
 PORT_TRANSCRIBER=4002
@@ -1079,24 +1098,33 @@ PYEOF
 
   # Sincronizar portas no .env caso tenham sido ajustadas dinamicamente
   if [ -f "${compose_dir}/.env" ]; then
-    sed -i "s/^PORT_DB=.*/PORT_DB=${PORT_DB_RESOLVIDA:-5432}/" "${compose_dir}/.env" 2>/dev/null || true
-    sed -i "s/^PORT_PGBOUNCER=.*/PORT_PGBOUNCER=${PORT_PGBOUNCER_RESOLVIDA:-6432}/" "${compose_dir}/.env" 2>/dev/null || true
-    sed -i "s/^PORT_REDIS=.*/PORT_REDIS=${PORT_REDIS_RESOLVIDA:-6379}/" "${compose_dir}/.env" 2>/dev/null || true
+    sed -i "s/^PORT_DB=.*/PORT_DB=${db_port:-${PORT_DB_RESOLVIDA:-5432}}/" "${compose_dir}/.env" 2>/dev/null || true
+    sed -i "s/^PORT_PGBOUNCER=.*/PORT_PGBOUNCER=${pgbouncer_port:-${PORT_PGBOUNCER_RESOLVIDA:-6432}}/" "${compose_dir}/.env" 2>/dev/null || true
+    sed -i "s/^PORT_REDIS=.*/PORT_REDIS=${redis_port:-${PORT_REDIS_RESOLVIDA:-6379}}/" "${compose_dir}/.env" 2>/dev/null || true
   fi
 
   if ! docker compose -p amanda up -d --build; then
     printf "${YELLOW} >> Alerta ao subir contêineres. Tentando auto-recuperação de portas e serviços...${WHITE}\n"
-    # Se a porta 5432 ainda estiver presa no host, remapeia para a próxima porta livre
-    if testar_porta_tcp_ocupada 5432; then
+    local check_db="${db_port:-5432}"
+    if testar_porta_tcp_ocupada "$check_db"; then
       local nova_porta_db
-      nova_porta_db=$(localizador_porta_livre 5433)
+      nova_porta_db=$(localizador_porta_livre "$((check_db + 1))")
       printf "${YELLOW} >> Realocando porta host do PostgreSQL para ${nova_porta_db}...${WHITE}\n"
       sed -i "s/^PORT_DB=.*/PORT_DB=${nova_porta_db}/" "${compose_dir}/.env" 2>/dev/null || true
     fi
-    if testar_porta_tcp_ocupada 6379; then
+    local check_redis="${redis_port:-6379}"
+    if testar_porta_tcp_ocupada "$check_redis"; then
       local nova_porta_redis
-      nova_porta_redis=$(localizador_porta_livre 6380)
+      nova_porta_redis=$(localizador_porta_livre "$((check_redis + 1))")
+      printf "${YELLOW} >> Realocando porta host do Redis para ${nova_porta_redis}...${WHITE}\n"
       sed -i "s/^PORT_REDIS=.*/PORT_REDIS=${nova_porta_redis}/" "${compose_dir}/.env" 2>/dev/null || true
+    fi
+    local check_pgb="${pgbouncer_port:-6432}"
+    if testar_porta_tcp_ocupada "$check_pgb"; then
+      local nova_porta_pgb
+      nova_porta_pgb=$(localizador_porta_livre "$((check_pgb + 1))")
+      printf "${YELLOW} >> Realocando porta host do PgBouncer para ${nova_porta_pgb}...${WHITE}\n"
+      sed -i "s/^PORT_PGBOUNCER=.*/PORT_PGBOUNCER=${nova_porta_pgb}/" "${compose_dir}/.env" 2>/dev/null || true
     fi
     docker compose -p amanda down 2>/dev/null || true
     sleep 2
@@ -4707,50 +4735,123 @@ define_proxy_base() {
   export proxy
 }
 
-# Define portas backend e frontend
+# Define portas backend, frontend, postgresql, redis e pgbouncer
 define_portas_base() {
   banner
-  printf "${WHITE} >> Usar as portas padrão para Backend (8080) e Frontend (3000) ? (S/N): ${WHITE}\n"
+  local def_be=8080
+  local def_fe=3000
+  local def_db=5432
+  local def_redis=6379
+  local def_pgb=6432
+
+  checar_porta_ocupada() {
+    local p="$1"
+    if command -v ss >/dev/null 2>&1 && ss -tlpn 2>/dev/null | grep -qE "[:.]${p}\b"; then
+      return 0
+    elif command -v netstat >/dev/null 2>&1 && netstat -tlpn 2>/dev/null | grep -qE "[:.]${p}\b"; then
+      return 0
+    elif command -v lsof >/dev/null 2>&1 && lsof -iTCP:"$p" -sTCP:LISTEN >/dev/null 2>&1; then
+      return 0
+    fi
+    (echo >/dev/tcp/127.0.0.1/"$p") 2>/dev/null && return 0
+    return 1
+  }
+
+  local status_be status_fe status_db status_redis status_pgb
+  checar_porta_ocupada 8080 && status_be="${RED}[Em uso]${WHITE}" || status_be="${GREEN}[Livre]${WHITE}"
+  checar_porta_ocupada 3000 && status_fe="${RED}[Em uso]${WHITE}" || status_fe="${GREEN}[Livre]${WHITE}"
+  checar_porta_ocupada 5432 && status_db="${RED}[Em uso - Ex: Postgres local]${WHITE}" || status_db="${GREEN}[Livre]${WHITE}"
+  checar_porta_ocupada 6379 && status_redis="${RED}[Em uso - Ex: Redis local]${WHITE}" || status_redis="${GREEN}[Livre]${WHITE}"
+  checar_porta_ocupada 6432 && status_pgb="${RED}[Em uso]${WHITE}" || status_pgb="${GREEN}[Livre]${WHITE}"
+
+  printf "${WHITE} >> Portas padrão da Stack Docker e status atual na VPS:\n\n"
+  printf "    1) Backend:      ${YELLOW}8080${WHITE}  %b\n" "$status_be"
+  printf "    2) Frontend:     ${YELLOW}3000${WHITE}  %b\n" "$status_fe"
+  printf "    3) PostgreSQL:   ${YELLOW}5432${WHITE}  %b\n" "$status_db"
+  printf "    4) Redis:        ${YELLOW}6379${WHITE}  %b\n" "$status_redis"
+  printf "    5) PgBouncer:    ${YELLOW}6432${WHITE}  %b\n\n" "$status_pgb"
+
+  printf "${WHITE} >> Deseja usar as portas padrão acima? (S/N) [Padrão: S]: ${WHITE}\n"
   echo
   read -p "> " use_default_ports
+  use_default_ports=${use_default_ports:-s}
   use_default_ports=$(echo "${use_default_ports}" | tr '[:upper:]' '[:lower:]')
   echo
 
-  default_backend_port=8080
-  default_frontend_port=3000
+  solicitar_porta() {
+    local label="$1"
+    local padrao="$2"
+    local var_nome="$3"
+    local p_escolhida
+
+    while true; do
+      printf "${WHITE} >> Digite a porta host para ${CYAN}%s${WHITE} [Padrão: ${YELLOW}%s${WHITE}]:\n" "$label" "$padrao"
+      read -p "> " p_escolhida
+      p_escolhida="${p_escolhida:-$padrao}"
+      p_escolhida=$(echo "$p_escolhida" | tr -d '[:space:]')
+
+      if ! [[ "$p_escolhida" =~ ^[0-9]+$ ]] || [ "$p_escolhida" -lt 1 ] || [ "$p_escolhida" -gt 65535 ]; then
+        printf "${RED} >> Porta inválida! Digite um número válido entre 1 e 65535.${WHITE}\n\n"
+        continue
+      fi
+
+      if checar_porta_ocupada "$p_escolhida"; then
+        printf "${RED} >> AVISO: A porta %s já está em uso na VPS por outro serviço! Escolha outra.${WHITE}\n\n" "$p_escolhida"
+        continue
+      fi
+
+      eval "$var_nome=\$p_escolhida"
+      break
+    done
+    echo
+  }
 
   if [ "${use_default_ports}" = "s" ]; then
-    backend_port=${default_backend_port}
-    frontend_port=${default_frontend_port}
-  else
-    while true; do
-      printf "${WHITE} >> Qual porta deseja para o Backend? ${WHITE}\n"
-      echo
-      read -p "> " backend_port
-      echo
-      if ! lsof -i:${backend_port} &>/dev/null; then
-        break
-      else
-        printf "${RED} >> A porta ${backend_port} já está em uso. Por favor, escolha outra.${WHITE}\n"
-        echo
-      fi
-    done
+    backend_port=${def_be}
+    frontend_port=${def_fe}
+    db_port=${def_db}
+    redis_port=${def_redis}
+    pgbouncer_port=${def_pgb}
 
-    while true; do
-      printf "${WHITE} >> Qual porta deseja para o Frontend? ${WHITE}\n"
-      echo
-      read -p "> " frontend_port
-      echo
-      if ! lsof -i:${frontend_port} &>/dev/null; then
-        break
-      else
-        printf "${RED} >> A porta ${frontend_port} já está em uso. Por favor, escolha outra.${WHITE}\n"
-        echo
+    if checar_porta_ocupada 5432; then
+      printf "${YELLOW} >> ATENÇÃO: A porta 5432 do PostgreSQL padrão já está em uso na VPS.${WHITE}\n"
+      printf "${WHITE}    Deseja definir uma porta personalizada para o PostgreSQL (ex: 5433)? (S/N) [Padrão: S]: ${WHITE}\n"
+      read -p "> " trocar_db
+      trocar_db=${trocar_db:-s}
+      if [ "$(echo "$trocar_db" | tr '[:upper:]' '[:lower:]')" = "s" ]; then
+        solicitar_porta "PostgreSQL" 5433 "db_port"
       fi
-    done
+    fi
+
+    if checar_porta_ocupada 6379; then
+      printf "${YELLOW} >> ATENÇÃO: A porta 6379 do Redis padrão já está em uso na VPS.${WHITE}\n"
+      printf "${WHITE}    Deseja definir uma porta personalizada para o Redis (ex: 6380)? (S/N) [Padrão: S]: ${WHITE}\n"
+      read -p "> " trocar_redis
+      trocar_redis=${trocar_redis:-s}
+      if [ "$(echo "$trocar_redis" | tr '[:upper:]' '[:lower:]')" = "s" ]; then
+        solicitar_porta "Redis" 6380 "redis_port"
+      fi
+    fi
+
+    if checar_porta_ocupada 6432; then
+      printf "${YELLOW} >> ATENÇÃO: A porta 6432 do PgBouncer padrão já está em uso na VPS.${WHITE}\n"
+      printf "${WHITE}    Deseja definir uma porta personalizada para o PgBouncer (ex: 6433)? (S/N) [Padrão: S]: ${WHITE}\n"
+      read -p "> " trocar_pgb
+      trocar_pgb=${trocar_pgb:-s}
+      if [ "$(echo "$trocar_pgb" | tr '[:upper:]' '[:lower:]')" = "s" ]; then
+        solicitar_porta "PgBouncer" 6433 "pgbouncer_port"
+      fi
+    fi
+  else
+    solicitar_porta "Backend" "${def_be}" "backend_port"
+    solicitar_porta "Frontend" "${def_fe}" "frontend_port"
+    solicitar_porta "PostgreSQL" "${def_db}" "db_port"
+    solicitar_porta "Redis" "${def_redis}" "redis_port"
+    solicitar_porta "PgBouncer" "${def_pgb}" "pgbouncer_port"
   fi
 
-  sleep 2
+  export backend_port frontend_port db_port redis_port pgbouncer_port
+  sleep 1
 }
 
 # Informa os dados de instalação
@@ -4773,6 +4874,9 @@ dados_instalacao_base() {
   printf "   ${WHITE}Proxy Usado: ----------->> ${YELLOW}${proxy}\n"
   printf "   ${WHITE}Porta Backend: --------->> ${YELLOW}${backend_port}\n"
   printf "   ${WHITE}Porta Frontend: -------->> ${YELLOW}${frontend_port}\n"
+  printf "   ${WHITE}Porta PostgreSQL: ------>> ${YELLOW}${db_port:-5432}\n"
+  printf "   ${WHITE}Porta Redis: ----------->> ${YELLOW}${redis_port:-6379}\n"
+  printf "   ${WHITE}Porta PgBouncer: ------->> ${YELLOW}${pgbouncer_port:-6432}\n"
   if [ -n "${versao_instalacao}" ]; then
     printf "   ${WHITE}Versão Instalada: ------->> ${YELLOW}${versao_instalacao}${WHITE}\n"
     printf "   ${WHITE}Commit Instalado: ------->> ${YELLOW}${commit_instalacao}${WHITE}\n"
