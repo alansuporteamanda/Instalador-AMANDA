@@ -383,12 +383,12 @@ EOF
 # ================================================================
 localizar_diretorio_compose() {
   local base_dir="${1:-/home/deploy/${empresa:-amanda}}"
-  if [ -f "${base_dir}/multiflow/docker-compose.yml" ]; then
-    printf '%s\n' "${base_dir}/multiflow"
+  if [ -f "${base_dir}/amanda/docker-compose.yml" ]; then
+    printf '%s\n' "${base_dir}/amanda"
   elif [ -f "${base_dir}/docker-compose.yml" ]; then
     printf '%s\n' "${base_dir}"
-  elif [ -f "${base_dir}/amanda/docker-compose.yml" ]; then
-    printf '%s\n' "${base_dir}/amanda"
+  elif [ -f "${base_dir}/multiflow/docker-compose.yml" ]; then
+    printf '%s\n' "${base_dir}/multiflow"
   else
     local achado
     achado=$(find "${base_dir}" -maxdepth 2 -name "docker-compose.yml" 2>/dev/null | head -n 1)
@@ -446,20 +446,20 @@ aplicar_atualizacao_url_individual() {
 
   case "$servico" in
     frontend)
-      docker compose up -d --build frontend
-      docker compose restart backend 2>/dev/null || true
+      docker compose -p amanda up -d --build frontend
+      docker compose -p amanda restart backend 2>/dev/null || true
       ;;
     backend)
-      docker compose up -d backend
-      docker compose restart frontend goflow_dispatcher 2>/dev/null || true
-      [ -d "${compose_dir}/api_oficial" ] && docker compose restart api_oficial 2>/dev/null || true
+      docker compose -p amanda up -d backend
+      docker compose -p amanda restart frontend goflow_dispatcher 2>/dev/null || true
+      [ -d "${compose_dir}/api_oficial" ] && docker compose -p amanda restart api_oficial 2>/dev/null || true
       ;;
     api_oficial)
-      docker compose up -d api_oficial
-      docker compose restart backend 2>/dev/null || true
+      docker compose -p amanda up -d api_oficial
+      docker compose -p amanda restart backend 2>/dev/null || true
       ;;
     *)
-      docker compose restart backend 2>/dev/null || true
+      docker compose -p amanda restart backend 2>/dev/null || true
       ;;
   esac
 
@@ -714,8 +714,12 @@ instalar_amanda_docker_stack() {
   codifica_clone_base || trata_erro "codifica_clone_base"
   baixa_codigo_base || trata_erro "baixa_codigo_base"
 
-  # Localizar diretório da stack compose
+  # Localizar e padronizar diretório da aplicação para amanda
   local app_dir="/home/deploy/${empresa:-amanda}"
+  if [ -d "${app_dir}/multiflow" ] && [ ! -d "${app_dir}/amanda" ]; then
+    printf "${PURPLE} >> Criando link do diretório da aplicação para amanda...${WHITE}\n"
+    ln -sfn "${app_dir}/multiflow" "${app_dir}/amanda" 2>/dev/null || true
+  fi
   local compose_dir
   compose_dir=$(localizar_diretorio_compose "${app_dir}")
 
@@ -765,11 +769,11 @@ EOF
   [ -d "${compose_dir}/backend" ] && cp "${compose_dir}/.env" "${compose_dir}/backend/.env" 2>/dev/null || true
   [ -d "${compose_dir}/frontend" ] && echo "REACT_APP_BACKEND_URL=${subdominio_backend}" > "${compose_dir}/frontend/.env" 2>/dev/null || true
 
-  # Configurar .env da API Oficial
+  # Configurar .env da API Oficial e corrigir estrutura de pastas (public)
   if [ -d "${compose_dir}/api_oficial" ]; then
     cat <<EOF > "${compose_dir}/api_oficial/.env"
 DATABASE_LINK=postgresql://${empresa:-amanda}:${senha_deploy:-Acertitech13@}@postgres:5432/api_oficial?schema=public
-URL_BACKEND_MULT100=${subdominio_backend}
+URL_BACKEND_MULT100=http://backend:8080
 REDIS_URI=redis://redis:6379
 PORT=6000
 TOKEN_ADMIN=adminpro
@@ -781,38 +785,62 @@ URL_API_OFICIAL=${subdominio_oficial}
 RABBITMQ_ENABLED_GLOBAL=false
 TZ=America/Sao_Paulo
 EOF
+    # Garante a existência do diretório public para não quebrar o build do Dockerfile da API Oficial
+    mkdir -p "${compose_dir}/api_oficial/public"
+    touch "${compose_dir}/api_oficial/public/.gitkeep"
+    if [ -f "${compose_dir}/api_oficial/Dockerfile" ]; then
+      sed -i 's|WORKDIR /app|WORKDIR /app\nRUN mkdir -p /app/public|' "${compose_dir}/api_oficial/Dockerfile" 2>/dev/null || true
+      sed -i 's|RUN npm install --production|RUN npm install --production \&\& npm install prisma@5.14.0|' "${compose_dir}/api_oficial/Dockerfile" 2>/dev/null || true
+    fi
+  fi
+
+  # Padronizar nomes para AMANDA (100% amanda_ nos contêineres, redes e volumes)
+  if [ -f "${compose_dir}/docker-compose.yml" ]; then
+    sed -i 's|container_name:[[:space:]]*multiflow_|container_name: amanda_|g' "${compose_dir}/docker-compose.yml" 2>/dev/null || true
+    sed -i 's|multiflow_net|amanda_net|g' "${compose_dir}/docker-compose.yml" 2>/dev/null || true
+    sed -i 's|multiflow_postgres|amanda_postgres|g' "${compose_dir}/docker-compose.yml" 2>/dev/null || true
+    sed -i 's|multiflow_pgbouncer|amanda_pgbouncer|g' "${compose_dir}/docker-compose.yml" 2>/dev/null || true
+    sed -i 's|multiflow_redis|amanda_redis|g' "${compose_dir}/docker-compose.yml" 2>/dev/null || true
+    sed -i 's|multiflow_backend|amanda_backend|g' "${compose_dir}/docker-compose.yml" 2>/dev/null || true
+    sed -i 's|multiflow_frontend|amanda_frontend|g' "${compose_dir}/docker-compose.yml" 2>/dev/null || true
+    sed -i 's|multiflow_transcricao|amanda_transcricao|g' "${compose_dir}/docker-compose.yml" 2>/dev/null || true
+    sed -i 's|multiflow_wuzapi|amanda_wuzapi|g' "${compose_dir}/docker-compose.yml" 2>/dev/null || true
+    sed -i 's|name:[[:space:]]*multiflow|name: amanda|g' "${compose_dir}/docker-compose.yml" 2>/dev/null || true
+    if ! grep -q "^name:" "${compose_dir}/docker-compose.yml"; then
+      sed -i '1i name: amanda' "${compose_dir}/docker-compose.yml"
+    fi
   fi
 
   # Integrar serviço api_oficial no docker-compose.yml se não estiver presente
   if [ -d "${compose_dir}/api_oficial" ] && ! grep -q "api_oficial:" "${compose_dir}/docker-compose.yml" 2>/dev/null; then
     printf "${WHITE} >> Integrando API Oficial (Meta Cloud API) na stack docker-compose.yml...\n"
     if grep -q "^volumes:" "${compose_dir}/docker-compose.yml"; then
-      sed -i '/^volumes:/i \  # ==========================================================\n  # 8. MICROSSERVIÇO: API OFICIAL (Meta WhatsApp Cloud API)\n  # ==========================================================\n  api_oficial:\n    build:\n      context: ./api_oficial\n      dockerfile: Dockerfile\n    container_name: multiflow_apioficial\n    restart: always\n    depends_on:\n      postgres:\n        condition: service_healthy\n      redis:\n        condition: service_healthy\n    environment:\n      PORT: 6000\n      DATABASE_LINK: postgresql://${DB_USER:-multiflow}:${DB_PASS:-multiflow_pass}@postgres:5432/api_oficial?schema=public\n      NAME_ADMIN: SetupAutomatizado\n      EMAIL_ADMIN: admin@amanda.com.br\n      PASSWORD_ADMIN: ${DB_PASS:-Acertitech13@}\n      JWT_SECRET: ${JWT_SECRET:-kZaOTd+YZpjRUyyuQUpigJaEMk4vcW4YOymKPZX0Ts8=}\n      URL_BACKEND_MULT100: ${BACKEND_URL:-http://backend:8080}\n      REDIS_URI: redis://redis:6379\n      TOKEN_ADMIN: adminpro\n      RABBITMQ_ENABLED_GLOBAL: "false"\n      TZ: America/Sao_Paulo\n    ports:\n      - "${PORT_APIOFICIAL:-6000}:6000"\n    networks:\n      - multiflow_net\n' "${compose_dir}/docker-compose.yml"
+      sed -i '/^volumes:/i \  # ==========================================================\n  # 8. MICROSSERVIÇO: API OFICIAL (Meta WhatsApp Cloud API)\n  # ==========================================================\n  api_oficial:\n    build:\n      context: ./api_oficial\n      dockerfile: Dockerfile\n    container_name: amanda_apioficial\n    restart: always\n    depends_on:\n      postgres:\n        condition: service_healthy\n      redis:\n        condition: service_healthy\n    environment:\n      PORT: 6000\n      DATABASE_LINK: postgresql://${DB_USER:-amanda}:${DB_PASS:-Acertitech13@}@postgres:5432/api_oficial?schema=public\n      NAME_ADMIN: SetupAutomatizado\n      EMAIL_ADMIN: admin@amanda.com.br\n      PASSWORD_ADMIN: ${DB_PASS:-Acertitech13@}\n      JWT_SECRET: ${JWT_SECRET:-kZaOTd+YZpjRUyyuQUpigJaEMk4vcW4YOymKPZX0Ts8=}\n      URL_BACKEND_MULT100: ${BACKEND_URL:-http://backend:8080}\n      REDIS_URI: redis://redis:6379\n      TOKEN_ADMIN: adminpro\n      RABBITMQ_ENABLED_GLOBAL: "false"\n      TZ: America/Sao_Paulo\n    ports:\n      - "${PORT_APIOFICIAL:-6000}:6000"\n    networks:\n      - amanda_net\n' "${compose_dir}/docker-compose.yml"
     fi
   fi
 
   chown -R deploy:deploy "${app_dir}"
   chmod -R 775 "${app_dir}"
 
-  # Criar volumes externos necessários (tanto prefixo amanda quanto multiflow)
+  # Criar volumes externos necessários com o nome amanda_
   banner
   printf "${WHITE} >> Criando volumes de dados persistentes do Docker...\n"
   echo
+  docker volume create amanda_postgres_data 2>/dev/null || true
+  docker volume create amanda_redis_data 2>/dev/null || true
+  docker volume create amanda_backend_database 2>/dev/null || true
+  docker volume create amanda_backend_public 2>/dev/null || true
+  docker volume create amanda_wuzapi_data 2>/dev/null || true
+  # Compatibilidade de volumes legados
   docker volume create multiflow_postgres_data 2>/dev/null || true
   docker volume create multiflow_redis_data 2>/dev/null || true
   docker volume create multiflow_backend_database 2>/dev/null || true
   docker volume create multiflow_backend_public 2>/dev/null || true
   docker volume create multiflow_wuzapi_data 2>/dev/null || true
 
-  # Assegurar componente WuzAPI (se a pasta não existir no repositório clonado)
-  if [ ! -d "${compose_dir}/wuzapi" ]; then
-    printf "${WHITE} >> Componente WuzAPI não encontrado em ${compose_dir}. Baixando repositório oficial...\n"
-    git clone --depth 1 https://github.com/asternic/wuzapi.git "${compose_dir}/wuzapi" 2>/dev/null || true
-  fi
-
-  # Se wuzapi não tiver Dockerfile local, configura para usar a imagem oficial asternic/wuzapi:latest
-  if [ ! -f "${compose_dir}/wuzapi/Dockerfile" ] && grep -q "context:.*wuzapi" "${compose_dir}/docker-compose.yml" 2>/dev/null; then
-    printf "${YELLOW} >> Configurando WuzAPI para imagem oficial pré-compilada asternic/wuzapi:latest...\n"
+  # Assegurar componente WuzAPI com imagem oficial pré-compilada para deploy ultra-rápido
+  if grep -q "context:.*wuzapi" "${compose_dir}/docker-compose.yml" 2>/dev/null; then
+    printf "${PURPLE} >> Configurando WuzAPI para usar imagem oficial asternic/wuzapi:latest...${WHITE}\n"
     sed -i '/wuzapi:/,/container_name:/ { /build:/d; /context:.*wuzapi/d; /dockerfile:.*/d; }' "${compose_dir}/docker-compose.yml"
     sed -i '/wuzapi:/a \    image: asternic/wuzapi:latest' "${compose_dir}/docker-compose.yml"
   fi
@@ -823,8 +851,8 @@ EOF
   printf "${YELLOW} >> Esse processo pode levar alguns minutos (download de imagens e build dos serviços)...\n"
   echo
   cd "${compose_dir}" || trata_erro "cd para compose_dir"
-  docker compose down 2>/dev/null || true
-  if ! docker compose up -d --build; then
+  docker compose -p amanda down 2>/dev/null || true
+  if ! docker compose -p amanda up -d --build; then
     printf "${RED}══════════════════════════════════════════════════════════════════${WHITE}\n"
     printf "${RED}❌ ERRO CRÍTICO: Falha ao compilar e subir os contêineres Docker!${WHITE}\n"
     printf "${YELLOW}   Diretório: ${BLUE}${compose_dir}${WHITE}\n"
@@ -856,7 +884,8 @@ EOF
 
   # Criar banco da API Oficial no PostgreSQL se não existir
   if [ -n "$pg_container" ]; then
-    docker exec "$pg_container" psql -U "${empresa:-amanda}" -d postgres -c "CREATE DATABASE api_oficial;" 2>/dev/null || true
+    docker exec "$pg_container" psql -U "${empresa:-amanda}" -d postgres -tc "SELECT 1 FROM pg_database WHERE datname = 'api_oficial'" | grep -q 1 || \
+      docker exec "$pg_container" psql -U "${empresa:-amanda}" -d postgres -c "CREATE DATABASE api_oficial;" 2>/dev/null || true
   fi
 
   # Executar migrações e seeds do Backend
@@ -872,6 +901,11 @@ EOF
     echo
     docker exec "$be_container" npx sequelize db:seed:all 2>/dev/null || true
     sleep 2
+
+    # Sincronizar credenciais oficiais AMANDA no banco de dados
+    if [ -n "$pg_container" ]; then
+      docker exec "$pg_container" psql -U "${empresa:-amanda}" -d "${empresa:-amanda}" -c "UPDATE \"Users\" SET email = 'admin@amanda.com.br' WHERE id = 1 AND email != 'admin@amanda.com.br';" 2>/dev/null || true
+    fi
   fi
 
   # Executar migrações da API Oficial
@@ -881,6 +915,7 @@ EOF
     echo
     docker exec "$oficial_container" npx prisma migrate deploy 2>/dev/null || docker exec "$oficial_container" npx prisma db push 2>/dev/null || true
     sleep 2
+    docker restart "$oficial_container" 2>/dev/null || true
   fi
 
   # Verificar se há contêineres rodando
@@ -974,8 +1009,8 @@ atualizar_amanda_docker() {
     sed -i '/wuzapi:/a \    image: asternic/wuzapi:latest' "${compose_dir}/docker-compose.yml"
   fi
 
-  docker compose pull 2>/dev/null || true
-  docker compose up -d --build
+  docker compose -p amanda pull 2>/dev/null || true
+  docker compose -p amanda up -d --build
 
   # Localizar contêineres dinamicamente
   local be_container oficial_container
@@ -1043,7 +1078,7 @@ menu_logs_containers() {
   local compose_dir
   compose_dir=$(localizar_diretorio_compose "${app_dir}")
   cd "$compose_dir" 2>/dev/null || true
-  docker compose logs -f --tail=100
+  docker compose -p amanda logs -f --tail=100
 }
 
 # ================================================================
@@ -1084,9 +1119,12 @@ exec_restaurar_banco_docker() {
   read -r conf_rest
   conf_rest=$(echo "$conf_rest" | tr '[:lower:]' '[:upper:]')
   if [ "$conf_rest" = "S" ]; then
-    cat "$arq_backup" | docker exec -i amanda_postgres psql -U amanda amanda
+    local pg_c
+    pg_c=$(docker ps --format '{{.Names}}' | grep -E 'postgres' | head -n 1)
+    [ -z "$pg_c" ] && pg_c="amanda_postgres"
+    cat "$arq_backup" | docker exec -i "$pg_c" psql -U "${empresa:-amanda}" "${empresa:-amanda}"
     printf "${GREEN} >> Restauração concluída! Reiniciando backend...${WHITE}\n"
-    docker restart amanda_backend 2>/dev/null || true
+    docker restart $(docker ps -q --filter "name=backend") 2>/dev/null || true
   fi
   echo
   printf "${WHITE}>> Pressione Enter para continuar...${WHITE}\n"
@@ -4311,6 +4349,9 @@ questoes_variaveis_base() {
   echo
   read -p "> " github_token
   github_token=$(printf '%s' "${github_token}" | tr -d '\r\n ' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+  if [ -z "${github_token}" ] && [ -n "${GITHUB_TOKEN:-}" ]; then
+    github_token="${GITHUB_TOKEN}"
+  fi
   echo
   # DEFINE LINK REPO GITHUB
   banner
@@ -5814,6 +5855,10 @@ baixa_codigo_base() {
       printf "${GREEN} >> Repositório já presente em ${dest_dir}. Sincronizando alterações...${WHITE}\n"
       cd "${dest_dir}" && GIT_TERMINAL_PROMPT=0 git fetch --all --prune 2>/dev/null || true
     else
+      if [ -d "${dest_dir}" ] && [ -n "$(ls -A "${dest_dir}" 2>/dev/null)" ]; then
+        printf "${YELLOW} >> Diretório ${dest_dir} existente sem repositório Git. Limpando para clone novo...${WHITE}\n"
+        rm -rf "${dest_dir}"
+      fi
       mkdir -p "${dest_dir}"
       GIT_TERMINAL_PROMPT=0 git clone "${github_url}" "${dest_dir}"
       if [ $? -ne 0 ]; then
