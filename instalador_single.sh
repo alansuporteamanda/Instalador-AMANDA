@@ -379,6 +379,28 @@ EOF
 }
 
 # ================================================================
+# LOCALIZADOR INTELIGENTE DO DIRETÓRIO DO DOCKER COMPOSE
+# ================================================================
+localizar_diretorio_compose() {
+  local base_dir="${1:-/home/deploy/${empresa:-amanda}}"
+  if [ -f "${base_dir}/multiflow/docker-compose.yml" ]; then
+    printf '%s\n' "${base_dir}/multiflow"
+  elif [ -f "${base_dir}/docker-compose.yml" ]; then
+    printf '%s\n' "${base_dir}"
+  elif [ -f "${base_dir}/amanda/docker-compose.yml" ]; then
+    printf '%s\n' "${base_dir}/amanda"
+  else
+    local achado
+    achado=$(find "${base_dir}" -maxdepth 2 -name "docker-compose.yml" 2>/dev/null | head -n 1)
+    if [ -n "$achado" ]; then
+      dirname "$achado"
+    else
+      printf '%s\n' "${base_dir}"
+    fi
+  fi
+}
+
+# ================================================================
 # APLICAR ATUALIZAÇÃO INDIVIDUAL DE URL E REINICIAR CONTÊINER
 # ================================================================
 aplicar_atualizacao_url_individual() {
@@ -521,13 +543,13 @@ atualizar_todas_urls_em_lote() {
 gerenciar_urls_sistema() {
   local empresa="amanda"
   local app_dir="/home/deploy/${empresa}"
-  local compose_dir="${app_dir}"
-  [ -d "${app_dir}/amanda" ] && compose_dir="${app_dir}/amanda"
+  local compose_dir
+  compose_dir=$(localizar_diretorio_compose "${app_dir}")
 
   local env_file="${compose_dir}/.env"
   if [ ! -f "$env_file" ]; then
     local alt_env
-    alt_env=$(ls -1 /home/deploy/*/.env /home/deploy/*/amanda/.env 2>/dev/null | head -1)
+    alt_env=$(ls -1 /home/deploy/*/.env /home/deploy/*/multiflow/.env /home/deploy/*/amanda/.env 2>/dev/null | head -1)
     if [ -n "$alt_env" ] && [ -f "$alt_env" ]; then
       env_file="$alt_env"
       compose_dir=$(dirname "$env_file")
@@ -693,14 +715,13 @@ instalar_amanda_docker_stack() {
   baixa_codigo_base || trata_erro "baixa_codigo_base"
 
   # Localizar diretório da stack compose
-  local app_dir="/home/deploy/${empresa}"
-  local compose_dir="${app_dir}"
-  if [ -d "${app_dir}/amanda" ] && [ -f "${app_dir}/amanda/docker-compose.yml" ]; then
-    compose_dir="${app_dir}/amanda"
-  fi
+  local app_dir="/home/deploy/${empresa:-amanda}"
+  local compose_dir
+  compose_dir=$(localizar_diretorio_compose "${app_dir}")
 
   banner
   printf "${WHITE} >> Configurando variáveis de ambiente da Stack AMANDA (Todas as APIs)...\n"
+  printf "${PURPLE} >> Diretório do Compose detectado: ${BLUE}%s${WHITE}\n" "$compose_dir"
   echo
 
   # Preparar .env da Stack Docker Compose com todas as APIs
@@ -738,6 +759,9 @@ USE_GO_CAMPAIGN_DISPATCHER=true
 TRANSCRIBE_URL=http://api_transcricao:4002
 EOF
 
+  # Garantir cópia do .env também na raiz do app_dir se diferente
+  [ "${compose_dir}" != "${app_dir}" ] && cp "${compose_dir}/.env" "${app_dir}/.env" 2>/dev/null || true
+
   [ -d "${compose_dir}/backend" ] && cp "${compose_dir}/.env" "${compose_dir}/backend/.env" 2>/dev/null || true
   [ -d "${compose_dir}/frontend" ] && echo "REACT_APP_BACKEND_URL=${subdominio_backend}" > "${compose_dir}/frontend/.env" 2>/dev/null || true
 
@@ -759,61 +783,104 @@ TZ=America/Sao_Paulo
 EOF
   fi
 
+  # Integrar serviço api_oficial no docker-compose.yml se não estiver presente
+  if [ -d "${compose_dir}/api_oficial" ] && ! grep -q "api_oficial:" "${compose_dir}/docker-compose.yml" 2>/dev/null; then
+    printf "${WHITE} >> Integrando API Oficial (Meta Cloud API) na stack docker-compose.yml...\n"
+    if grep -q "^volumes:" "${compose_dir}/docker-compose.yml"; then
+      sed -i '/^volumes:/i \  # ==========================================================\n  # 8. MICROSSERVIÇO: API OFICIAL (Meta WhatsApp Cloud API)\n  # ==========================================================\n  api_oficial:\n    build:\n      context: ./api_oficial\n      dockerfile: Dockerfile\n    container_name: multiflow_apioficial\n    restart: always\n    depends_on:\n      postgres:\n        condition: service_healthy\n      redis:\n        condition: service_healthy\n    environment:\n      PORT: 6000\n      DATABASE_LINK: postgresql://${DB_USER:-multiflow}:${DB_PASS:-multiflow_pass}@postgres:5432/api_oficial?schema=public\n      NAME_ADMIN: SetupAutomatizado\n      EMAIL_ADMIN: admin@amanda.com.br\n      PASSWORD_ADMIN: ${DB_PASS:-Acertitech13@}\n      JWT_SECRET: ${JWT_SECRET:-kZaOTd+YZpjRUyyuQUpigJaEMk4vcW4YOymKPZX0Ts8=}\n      URL_BACKEND_MULT100: ${BACKEND_URL:-http://backend:8080}\n      REDIS_URI: redis://redis:6379\n      TOKEN_ADMIN: adminpro\n      RABBITMQ_ENABLED_GLOBAL: "false"\n      TZ: America/Sao_Paulo\n    ports:\n      - "${PORT_APIOFICIAL:-6000}:6000"\n    networks:\n      - multiflow_net\n' "${compose_dir}/docker-compose.yml"
+    fi
+  fi
+
   chown -R deploy:deploy "${app_dir}"
   chmod -R 775 "${app_dir}"
 
-  # Criar volumes externos necessários
+  # Criar volumes externos necessários (tanto prefixo amanda quanto multiflow)
   banner
   printf "${WHITE} >> Criando volumes de dados persistentes do Docker...\n"
   echo
-  docker volume create amanda_postgres_data 2>/dev/null || true
-  docker volume create amanda_redis_data 2>/dev/null || true
-  docker volume create amanda_backend_database 2>/dev/null || true
-  docker volume create amanda_backend_public 2>/dev/null || true
-  docker volume create amanda_wuzapi_data 2>/dev/null || true
+  docker volume create multiflow_postgres_data 2>/dev/null || true
+  docker volume create multiflow_redis_data 2>/dev/null || true
+  docker volume create multiflow_backend_database 2>/dev/null || true
+  docker volume create multiflow_backend_public 2>/dev/null || true
+  docker volume create multiflow_wuzapi_data 2>/dev/null || true
 
   # Subir stack
   banner
   printf "${WHITE} >> Construindo e iniciando todos os contêineres e APIs da AMANDA...\n"
+  printf "${YELLOW} >> Esse processo pode levar alguns minutos (download de imagens e build dos serviços)...\n"
   echo
   cd "${compose_dir}" || trata_erro "cd para compose_dir"
   docker compose down 2>/dev/null || true
-  docker compose up -d --build
+  if ! docker compose up -d --build; then
+    printf "${RED}══════════════════════════════════════════════════════════════════${WHITE}\n"
+    printf "${RED}❌ ERRO CRÍTICO: Falha ao compilar e subir os contêineres Docker!${WHITE}\n"
+    printf "${YELLOW}   Diretório: ${BLUE}${compose_dir}${WHITE}\n"
+    printf "${RED}══════════════════════════════════════════════════════════════════${WHITE}\n"
+    sleep 5
+    exit 1
+  fi
+
+  # Localizar dinamicamente os nomes dos contêineres iniciados
+  local pg_container be_container oficial_container
+  pg_container=$(docker ps --format '{{.Names}}' | grep -E 'postgres' | head -n 1)
+  be_container=$(docker ps --format '{{.Names}}' | grep -E 'backend' | head -n 1)
+  oficial_container=$(docker ps --format '{{.Names}}' | grep -E 'oficial' | head -n 1)
 
   # Aguardar banco de dados ficar pronto
+  banner
   printf "${WHITE} >> Aguardando banco de dados PostgreSQL inicializar...\n"
-  sleep 5
+  echo
   local tentativas=0
   while [ $tentativas -lt 30 ]; do
-    if docker exec amanda_postgres pg_isready -U "${empresa:-amanda}" -d "${empresa:-amanda}" >/dev/null 2>&1; then
-      printf "${GREEN} >> Banco de dados pronto!${WHITE}\n"
+    if [ -n "$pg_container" ] && docker exec "$pg_container" pg_isready -U "${empresa:-amanda}" -d "${empresa:-amanda}" >/dev/null 2>&1; then
+      printf "${GREEN} >> Banco de dados pronto! (${pg_container})${WHITE}\n"
       break
     fi
     tentativas=$((tentativas + 1))
     sleep 2
+    [ -z "$pg_container" ] && pg_container=$(docker ps --format '{{.Names}}' | grep -E 'postgres' | head -n 1)
   done
 
   # Criar banco da API Oficial no PostgreSQL se não existir
-  docker exec amanda_postgres psql -U "${empresa:-amanda}" -d postgres -c "CREATE DATABASE api_oficial;" 2>/dev/null || true
+  if [ -n "$pg_container" ]; then
+    docker exec "$pg_container" psql -U "${empresa:-amanda}" -d postgres -c "CREATE DATABASE api_oficial;" 2>/dev/null || true
+  fi
 
-  # Executar migrações e seeds
-  banner
-  printf "${WHITE} >> Executando migrações do Backend (db:migrate)...\n"
-  echo
-  docker exec amanda_backend npx sequelize db:migrate 2>/dev/null || true
-  sleep 2
+  # Executar migrações e seeds do Backend
+  if [ -n "$be_container" ]; then
+    banner
+    printf "${WHITE} >> Executando migrações do Backend (db:migrate)...\n"
+    echo
+    docker exec "$be_container" npx sequelize db:migrate 2>/dev/null || true
+    sleep 2
 
-  banner
-  printf "${WHITE} >> Inserindo registros iniciais do sistema Backend (db:seed:all)...\n"
-  echo
-  docker exec amanda_backend npx sequelize db:seed:all 2>/dev/null || true
-  sleep 2
+    banner
+    printf "${WHITE} >> Inserindo registros iniciais do sistema Backend (db:seed:all)...\n"
+    echo
+    docker exec "$be_container" npx sequelize db:seed:all 2>/dev/null || true
+    sleep 2
+  fi
 
-  banner
-  printf "${WHITE} >> Executando migrações da API Oficial (Prisma)...\n"
-  echo
-  docker exec amanda_apioficial npx prisma migrate deploy 2>/dev/null || docker exec amanda_apioficial npx prisma db push 2>/dev/null || true
-  sleep 2
+  # Executar migrações da API Oficial
+  if [ -n "$oficial_container" ]; then
+    banner
+    printf "${WHITE} >> Executando migrações da API Oficial (Prisma)...\n"
+    echo
+    docker exec "$oficial_container" npx prisma migrate deploy 2>/dev/null || docker exec "$oficial_container" npx prisma db push 2>/dev/null || true
+    sleep 2
+  fi
+
+  # Verificar se há contêineres rodando
+  local total_rodando
+  total_rodando=$(docker ps --filter "name=multiflow" --filter "name=amanda" -q | wc -l)
+  if [ "$total_rodando" -eq 0 ]; then
+    printf "${RED}══════════════════════════════════════════════════════════════════${WHITE}\n"
+    printf "${RED}❌ ERRO: Nenhum contêiner da AMANDA está ativo após a instalação!${WHITE}\n"
+    printf "${YELLOW}   Consulte os logs com: docker compose -f ${compose_dir}/docker-compose.yml logs${WHITE}\n"
+    printf "${RED}══════════════════════════════════════════════════════════════════${WHITE}\n"
+    sleep 5
+    exit 1
+  fi
 
   # Configurar Proxy Reverso e SSL (apenas se houver domínios configurados)
   if [ "${INSTALACAO_SEM_DOMINIO:-0}" != "1" ] && [ "${proxy}" != "none" ]; then
@@ -848,7 +915,7 @@ EOF
   printf "   ${WHITE}Usuário Administrador:   ${PURPLE}admin@amanda.com.br${WHITE}\n"
   printf "   ${WHITE}Senha Padrão:            ${PURPLE}adminamanda${WHITE}\n\n"
   printf "   ${PURPLE}>> Todos os Contêineres e APIs Ativos:${WHITE}\n"
-  docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" | grep -E "amanda|NAMES" || docker ps
+  docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" | grep -E "multiflow|amanda|NAMES" || docker ps
   echo
   printf "${WHITE}>> Pressione qualquer tecla para voltar ao menu principal...${WHITE}\n"
   read -p ""
@@ -860,8 +927,8 @@ EOF
 atualizar_amanda_docker() {
   local empresa="amanda"
   local app_dir="/home/deploy/${empresa}"
-  local compose_dir="${app_dir}"
-  [ -d "${app_dir}/amanda" ] && compose_dir="${app_dir}/amanda"
+  local compose_dir
+  compose_dir=$(localizar_diretorio_compose "${app_dir}")
 
   banner
   printf "   ${PURPLE}╔══════════════════════════════════════════════════════════════╗${WHITE}\n"
@@ -881,16 +948,6 @@ atualizar_amanda_docker() {
   git checkout main 2>/dev/null || true
   git pull origin main 2>/dev/null || true
 
-  # Assegurar links de compatibilidade
-  if [ -d "${app_dir}/amanda/backend" ] && [ ! -d "${app_dir}/backend" ]; then
-    ln -sfn "${app_dir}/amanda/backend" "${app_dir}/backend"
-    ln -sfn "${app_dir}/amanda/frontend" "${app_dir}/frontend"
-    [ -d "${app_dir}/amanda/wuzapi" ] && ln -sfn "${app_dir}/amanda/wuzapi" "${app_dir}/wuzapi"
-    [ -d "${app_dir}/amanda/goflow_dispatcher" ] && ln -sfn "${app_dir}/amanda/goflow_dispatcher" "${app_dir}/goflow_dispatcher"
-    [ -d "${app_dir}/amanda/api_transcricao" ] && ln -sfn "${app_dir}/amanda/api_transcricao" "${app_dir}/api_transcricao"
-    [ -d "${app_dir}/amanda/api_oficial" ] && ln -sfn "${app_dir}/amanda/api_oficial" "${app_dir}/api_oficial"
-  fi
-
   banner
   printf "${PURPLE} >> Reconstruindo e reiniciando todos os contêineres da AMANDA...${WHITE}\n"
   echo
@@ -898,16 +955,24 @@ atualizar_amanda_docker() {
   docker compose pull 2>/dev/null || true
   docker compose up -d --build
 
+  # Localizar contêineres dinamicamente
+  local be_container oficial_container
+  be_container=$(docker ps --format '{{.Names}}' | grep -E 'backend' | head -n 1)
+  oficial_container=$(docker ps --format '{{.Names}}' | grep -E 'oficial' | head -n 1)
+
   banner
   printf "${PURPLE} >> Executando migrações do banco de dados (Backend e API Oficial)...${WHITE}\n"
   echo
-  docker exec amanda_backend npx sequelize db:migrate 2>/dev/null || true
-  docker exec amanda_apioficial npx prisma migrate deploy 2>/dev/null || docker exec amanda_apioficial npx prisma db push 2>/dev/null || true
+  [ -n "$be_container" ] && docker exec "$be_container" npx sequelize db:migrate 2>/dev/null || true
+  [ -n "$oficial_container" ] && {
+    docker exec "$oficial_container" npx prisma migrate deploy 2>/dev/null || \
+    docker exec "$oficial_container" npx prisma db push 2>/dev/null || true
+  }
 
   banner
   printf "   ${GREEN}>> ATUALIZAÇÃO AMANDA CONCLUÍDA COM SUCESSO!${WHITE}\n\n"
   printf "   ${PURPLE}>> Status dos Contêineres:${WHITE}\n"
-  docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" | grep -E "amanda|NAMES" || docker ps
+  docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" | grep -E "multiflow|amanda|NAMES" || docker ps
   echo
   printf "${WHITE}>> Pressione Enter para voltar ao menu principal...${WHITE}\n"
   read -r
@@ -921,25 +986,25 @@ menu_status_reiniciar_containers() {
   printf "   ${PURPLE}╔══════════════════════════════════════════════════════════════╗${WHITE}\n"
   printf "   ${PURPLE}║${WHITE}            STATUS E REINÍCIO DE CONTÊINERES                  ${PURPLE}║${WHITE}\n"
   printf "   ${PURPLE}╚══════════════════════════════════════════════════════════════╝${WHITE}\n\n"
-  docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" | grep -E "amanda|NAMES" || docker ps
+  docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" | grep -E "multiflow|amanda|NAMES" || docker ps
   echo
   printf "   ${WHITE}Opções:\n"
   printf "     [1] Reiniciar TODOS os contêineres AMANDA\n"
-  printf "     [2] Reiniciar apenas Backend (amanda_backend)\n"
-  printf "     [3] Reiniciar apenas Frontend (amanda_frontend)\n"
-  printf "     [4] Reiniciar apenas API Oficial (amanda_apioficial)\n"
-  printf "     [5] Reiniciar apenas WuzAPI (amanda_wuzapi)\n"
-  printf "     [6] Reiniciar apenas Dispatcher de Campanhas (amanda_campaign_dispatcher)\n"
+  printf "     [2] Reiniciar apenas Backend (backend)\n"
+  printf "     [3] Reiniciar apenas Frontend (frontend)\n"
+  printf "     [4] Reiniciar apenas API Oficial (api_oficial)\n"
+  printf "     [5] Reiniciar apenas WuzAPI (wuzapi)\n"
+  printf "     [6] Reiniciar apenas Transcrição de Áudio (api_transcricao)\n"
   printf "     [0] Voltar ao Menu Principal\n\n"
   printf "${WHITE}   Escolha uma opção: ${PURPLE}"
   read -r op_rest
   case "$op_rest" in
-    1) docker restart $(docker ps -q --filter "name=amanda_") 2>/dev/null || true; printf "${GREEN} >> Todos os contêineres reiniciados!${WHITE}\n"; sleep 2 ;;
-    2) docker restart amanda_backend 2>/dev/null || true; printf "${GREEN} >> Backend reiniciado!${WHITE}\n"; sleep 2 ;;
-    3) docker restart amanda_frontend 2>/dev/null || true; printf "${GREEN} >> Frontend reiniciado!${WHITE}\n"; sleep 2 ;;
-    4) docker restart amanda_apioficial 2>/dev/null || true; printf "${GREEN} >> API Oficial reiniciada!${WHITE}\n"; sleep 2 ;;
-    5) docker restart amanda_wuzapi 2>/dev/null || true; printf "${GREEN} >> WuzAPI reiniciada!${WHITE}\n"; sleep 2 ;;
-    6) docker restart amanda_campaign_dispatcher 2>/dev/null || true; printf "${GREEN} >> Dispatcher reiniciado!${WHITE}\n"; sleep 2 ;;
+    1) docker restart $(docker ps -q --filter "name=amanda" --filter "name=multiflow") 2>/dev/null || true; printf "${GREEN} >> Todos os contêineres reiniciados!${WHITE}\n"; sleep 2 ;;
+    2) docker restart $(docker ps -q --filter "name=backend") 2>/dev/null || true; printf "${GREEN} >> Backend reiniciado!${WHITE}\n"; sleep 2 ;;
+    3) docker restart $(docker ps -q --filter "name=frontend") 2>/dev/null || true; printf "${GREEN} >> Frontend reiniciado!${WHITE}\n"; sleep 2 ;;
+    4) docker restart $(docker ps -q --filter "name=oficial") 2>/dev/null || true; printf "${GREEN} >> API Oficial reiniciada!${WHITE}\n"; sleep 2 ;;
+    5) docker restart $(docker ps -q --filter "name=wuzapi") 2>/dev/null || true; printf "${GREEN} >> WuzAPI reiniciada!${WHITE}\n"; sleep 2 ;;
+    6) docker restart $(docker ps -q --filter "name=transcricao") 2>/dev/null || true; printf "${GREEN} >> Transcrição reiniciada!${WHITE}\n"; sleep 2 ;;
     *) ;;
   esac
 }
@@ -953,8 +1018,8 @@ menu_logs_containers() {
   sleep 2
   local empresa="amanda"
   local app_dir="/home/deploy/${empresa}"
-  local compose_dir="${app_dir}"
-  [ -d "${app_dir}/amanda" ] && compose_dir="${app_dir}/amanda"
+  local compose_dir
+  compose_dir=$(localizar_diretorio_compose "${app_dir}")
   cd "$compose_dir" 2>/dev/null || true
   docker compose logs -f --tail=100
 }
@@ -968,7 +1033,9 @@ exec_backup_banco_docker() {
   local backup_dir="/home/deploy/backups"
   mkdir -p "$backup_dir"
   local backup_file="${backup_dir}/amanda_backup_$(date +%Y%m%d_%H%M%S).sql"
-  if docker exec amanda_postgres pg_dump -U amanda amanda > "$backup_file" 2>/dev/null; then
+  local pg_container
+  pg_container=$(docker ps --format '{{.Names}}' | grep -E 'postgres' | head -n 1)
+  if [ -n "$pg_container" ] && docker exec "$pg_container" pg_dump -U "${empresa:-amanda}" "${empresa:-amanda}" > "$backup_file" 2>/dev/null; then
     printf "${GREEN} >> Backup gerado com sucesso em: ${PURPLE}%s${WHITE}\n" "$backup_file"
   else
     printf "${RED} >> Erro ao gerar backup do banco de dados.${WHITE}\n"
