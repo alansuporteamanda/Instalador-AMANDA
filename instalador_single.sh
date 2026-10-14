@@ -804,6 +804,19 @@ EOF
   docker volume create multiflow_backend_public 2>/dev/null || true
   docker volume create multiflow_wuzapi_data 2>/dev/null || true
 
+  # Assegurar componente WuzAPI (se a pasta não existir no repositório clonado)
+  if [ ! -d "${compose_dir}/wuzapi" ]; then
+    printf "${WHITE} >> Componente WuzAPI não encontrado em ${compose_dir}. Baixando repositório oficial...\n"
+    git clone --depth 1 https://github.com/asternic/wuzapi.git "${compose_dir}/wuzapi" 2>/dev/null || true
+  fi
+
+  # Se wuzapi não tiver Dockerfile local, configura para usar a imagem oficial asternic/wuzapi:latest
+  if [ ! -f "${compose_dir}/wuzapi/Dockerfile" ] && grep -q "context:.*wuzapi" "${compose_dir}/docker-compose.yml" 2>/dev/null; then
+    printf "${YELLOW} >> Configurando WuzAPI para imagem oficial pré-compilada asternic/wuzapi:latest...\n"
+    sed -i '/wuzapi:/,/container_name:/ { /build:/d; /context:.*wuzapi/d; /dockerfile:.*/d; }' "${compose_dir}/docker-compose.yml"
+    sed -i '/wuzapi:/a \    image: asternic/wuzapi:latest' "${compose_dir}/docker-compose.yml"
+  fi
+
   # Subir stack
   banner
   printf "${WHITE} >> Construindo e iniciando todos os contêineres e APIs da AMANDA...\n"
@@ -950,8 +963,17 @@ atualizar_amanda_docker() {
 
   banner
   printf "${PURPLE} >> Reconstruindo e reiniciando todos os contêineres da AMANDA...${WHITE}\n"
-  echo
   cd "${compose_dir}" || cd "${app_dir}" || return 1
+
+  # Assegurar componente WuzAPI
+  if [ ! -d "${compose_dir}/wuzapi" ]; then
+    git clone --depth 1 https://github.com/asternic/wuzapi.git "${compose_dir}/wuzapi" 2>/dev/null || true
+  fi
+  if [ ! -f "${compose_dir}/wuzapi/Dockerfile" ] && grep -q "context:.*wuzapi" "${compose_dir}/docker-compose.yml" 2>/dev/null; then
+    sed -i '/wuzapi:/,/container_name:/ { /build:/d; /context:.*wuzapi/d; /dockerfile:.*/d; }' "${compose_dir}/docker-compose.yml"
+    sed -i '/wuzapi:/a \    image: asternic/wuzapi:latest' "${compose_dir}/docker-compose.yml"
+  fi
+
   docker compose pull 2>/dev/null || true
   docker compose up -d --build
 
