@@ -879,8 +879,8 @@ EOF
     mkdir -p "${compose_dir}/api_oficial/public"
     touch "${compose_dir}/api_oficial/public/.gitkeep"
     if [ -f "${compose_dir}/api_oficial/Dockerfile" ]; then
-      sed -i 's|WORKDIR /app|WORKDIR /app\nRUN mkdir -p /app/public|' "${compose_dir}/api_oficial/Dockerfile" 2>/dev/null || true
-      sed -i 's|RUN npm install --production|RUN npm install --production \&\& npm install prisma@5.14.0|' "${compose_dir}/api_oficial/Dockerfile" 2>/dev/null || true
+      grep -q "mkdir -p /app/public" "${compose_dir}/api_oficial/Dockerfile" || sed -i 's|WORKDIR /app|WORKDIR /app\nRUN mkdir -p /app/public|' "${compose_dir}/api_oficial/Dockerfile" 2>/dev/null || true
+      grep -q "prisma@5.14.0" "${compose_dir}/api_oficial/Dockerfile" || sed -i 's|RUN npm install --production$|RUN npm install --production \&\& npm install prisma@5.14.0|' "${compose_dir}/api_oficial/Dockerfile" 2>/dev/null || true
     fi
   fi
 
