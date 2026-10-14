@@ -107,3 +107,57 @@ verificar_docker_funcionando() {
   fi
   docker compose version >/dev/null 2>&1 || command -v docker-compose >/dev/null 2>&1
 }
+
+liberar_portas_e_servicos_host() {
+  printf " >> Verificando e liberando portas e serviços conflitantes no host...\n"
+  local srv
+  for srv in postgresql redis-server redis pgbouncer; do
+    if systemctl is-active --quiet "$srv" 2>/dev/null || service "$srv" status >/dev/null 2>&1; then
+      printf " >> Desativando serviço nativo host '%s' (libera porta e RAM para o Docker)...\n" "$srv"
+      systemctl stop "$srv" 2>/dev/null || service "$srv" stop 2>/dev/null || true
+      systemctl disable "$srv" 2>/dev/null || true
+    fi
+  done
+
+  local c
+  for c in amanda_postgres amanda_redis amanda_pgbouncer amanda_backend amanda_frontend amanda_apioficial amanda_wuzapi amanda_campaign_dispatcher amanda_transcricao; do
+    if docker ps -a --format '{{.Names}}' | grep -qw "$c"; then
+      docker rm -f "$c" >/dev/null 2>&1 || true
+    fi
+  done
+
+  testar_porta_tcp_ocupada() {
+    local p="$1"
+    if command -v ss >/dev/null 2>&1; then
+      ss -tlpn 2>/dev/null | grep -qE "[:.]${p}\b" && return 0
+    elif command -v netstat >/dev/null 2>&1; then
+      netstat -tlpn 2>/dev/null | grep -qE "[:.]${p}\b" && return 0
+    elif command -v lsof >/dev/null 2>&1; then
+      lsof -iTCP:"$p" -sTCP:LISTEN >/dev/null 2>&1 && return 0
+    fi
+    (echo >/dev/tcp/127.0.0.1/"$p") 2>/dev/null && return 0
+    return 1
+  }
+
+  local p
+  for p in 5432 6379 6432; do
+    if testar_porta_tcp_ocupada "$p"; then
+      fuser -k "${p}/tcp" 2>/dev/null || true
+      sleep 1
+    fi
+  done
+
+  localizador_porta_livre() {
+    local candidata="$1"
+    while testar_porta_tcp_ocupada "$candidata"; do
+      candidata=$((candidata + 1))
+    done
+    printf '%s\n' "$candidata"
+  }
+
+  PORT_DB_RESOLVIDA=$(localizador_porta_livre 5432)
+  PORT_REDIS_RESOLVIDA=$(localizador_porta_livre 6379)
+  PORT_PGBOUNCER_RESOLVIDA=$(localizador_porta_livre 6432)
+  export PORT_DB_RESOLVIDA PORT_REDIS_RESOLVIDA PORT_PGBOUNCER_RESOLVIDA
+}
+

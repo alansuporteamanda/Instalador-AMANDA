@@ -774,6 +774,82 @@ garantir_docker_e_compose() {
 }
 
 # ================================================================
+# LIBERAR PORTAS E DESATIVAR SERVIÇOS NATIVOS CONFLITANTES NO HOST
+# ================================================================
+liberar_portas_e_servicos_host() {
+  printf "${PURPLE} >> Verificando e liberando portas e serviços conflitantes no host...${WHITE}\n"
+
+  # 1. Desativar serviços nativos da VPS que concorrem com a Stack 100% Docker
+  local srv
+  for srv in postgresql redis-server redis pgbouncer; do
+    if systemctl is-active --quiet "$srv" 2>/dev/null || service "$srv" status >/dev/null 2>&1; then
+      printf "${YELLOW} >> Desativando serviço nativo host '%s' (libera porta e RAM para o Docker)...${WHITE}\n" "$srv"
+      systemctl stop "$srv" 2>/dev/null || service "$srv" stop 2>/dev/null || true
+      systemctl disable "$srv" 2>/dev/null || true
+    fi
+  done
+
+  # 2. Remover contêineres órfãos/travados em conflito de nome ou porta
+  local c
+  for c in amanda_postgres amanda_redis amanda_pgbouncer amanda_backend amanda_frontend amanda_apioficial amanda_wuzapi amanda_campaign_dispatcher amanda_transcricao; do
+    if docker ps -a --format '{{.Names}}' | grep -qw "$c"; then
+      docker rm -f "$c" >/dev/null 2>&1 || true
+    fi
+  done
+
+  # 3. Testador universal de porta TCP ocupada no host
+  testar_porta_tcp_ocupada() {
+    local p="$1"
+    if command -v ss >/dev/null 2>&1; then
+      ss -tlpn 2>/dev/null | grep -qE "[:.]${p}\b" && return 0
+    elif command -v netstat >/dev/null 2>&1; then
+      netstat -tlpn 2>/dev/null | grep -qE "[:.]${p}\b" && return 0
+    elif command -v lsof >/dev/null 2>&1; then
+      lsof -iTCP:"$p" -sTCP:LISTEN >/dev/null 2>&1 && return 0
+    fi
+    (echo >/dev/tcp/127.0.0.1/"$p") 2>/dev/null && return 0
+    return 1
+  }
+
+  # 4. Tentar finalizar processos residuais nas portas críticas (5432, 6379, 6432)
+  local p
+  for p in 5432 6379 6432; do
+    if testar_porta_tcp_ocupada "$p"; then
+      printf "${YELLOW} >> Porta %s ocupada por processo residual. Tentando liberar...${WHITE}\n" "$p"
+      fuser -k "${p}/tcp" 2>/dev/null || true
+      sleep 1
+    fi
+  done
+
+  # 5. Localizador dinâmico de porta livre para evitar conflitos fatais de bind
+  localizador_porta_livre() {
+    local candidata="$1"
+    while testar_porta_tcp_ocupada "$candidata"; do
+      candidata=$((candidata + 1))
+    done
+    printf '%s\n' "$candidata"
+  }
+
+  PORT_DB_RESOLVIDA=$(localizador_porta_livre 5432)
+  PORT_REDIS_RESOLVIDA=$(localizador_porta_livre 6379)
+  PORT_PGBOUNCER_RESOLVIDA=$(localizador_porta_livre 6432)
+
+  export PORT_DB_RESOLVIDA
+  export PORT_REDIS_RESOLVIDA
+  export PORT_PGBOUNCER_RESOLVIDA
+
+  if [ "$PORT_DB_RESOLVIDA" != "5432" ]; then
+    printf "${YELLOW} >> AVISO: Porta host 5432 ocupada. Postgres mapeado na porta host ${PORT_DB_RESOLVIDA}.${WHITE}\n"
+  fi
+  if [ "$PORT_REDIS_RESOLVIDA" != "6379" ]; then
+    printf "${YELLOW} >> AVISO: Porta host 6379 ocupada. Redis mapeado na porta host ${PORT_REDIS_RESOLVIDA}.${WHITE}\n"
+  fi
+  if [ "$PORT_PGBOUNCER_RESOLVIDA" != "6432" ]; then
+    printf "${YELLOW} >> AVISO: Porta host 6432 ocupada. PgBouncer mapeado na porta host ${PORT_PGBOUNCER_RESOLVIDA}.${WHITE}\n"
+  fi
+}
+
+# ================================================================
 # INSTALAÇÃO COMPLETA AMANDA VIA DOCKER COMPOSE (TODAS AS APIs)
 # ================================================================
 instalar_amanda_docker_stack() {
@@ -798,6 +874,9 @@ instalar_amanda_docker_stack() {
 
   # Garantir Docker e Docker Compose instalados e 100% operacionais automaticamente
   garantir_docker_e_compose
+
+  # Liberar portas e parar serviços nativos que possam conflitar com Docker
+  liberar_portas_e_servicos_host
 
   # Instalar Git e baixar o repositório
   instala_git_base || trata_erro "instala_git_base"
@@ -827,9 +906,9 @@ URL_API_OFICIAL=${subdominio_oficial}
 PORT_BACKEND=${backend_port:-8080}
 PORT_FRONTEND=${frontend_port:-3000}
 PORT_APIOFICIAL=6000
-PORT_DB=5432
-PORT_PGBOUNCER=6432
-PORT_REDIS=6379
+PORT_DB=${PORT_DB_RESOLVIDA:-5432}
+PORT_PGBOUNCER=${PORT_PGBOUNCER_RESOLVIDA:-6432}
+PORT_REDIS=${PORT_REDIS_RESOLVIDA:-6379}
 PORT_WUZAPI=8090
 PORT_DISPATCHER=8095
 PORT_TRANSCRIBER=4002
@@ -996,13 +1075,39 @@ PYEOF
   fi
 
   docker compose -p amanda down 2>/dev/null || true
+  liberar_portas_e_servicos_host
+
+  # Sincronizar portas no .env caso tenham sido ajustadas dinamicamente
+  if [ -f "${compose_dir}/.env" ]; then
+    sed -i "s/^PORT_DB=.*/PORT_DB=${PORT_DB_RESOLVIDA:-5432}/" "${compose_dir}/.env" 2>/dev/null || true
+    sed -i "s/^PORT_PGBOUNCER=.*/PORT_PGBOUNCER=${PORT_PGBOUNCER_RESOLVIDA:-6432}/" "${compose_dir}/.env" 2>/dev/null || true
+    sed -i "s/^PORT_REDIS=.*/PORT_REDIS=${PORT_REDIS_RESOLVIDA:-6379}/" "${compose_dir}/.env" 2>/dev/null || true
+  fi
+
   if ! docker compose -p amanda up -d --build; then
-    printf "${RED}══════════════════════════════════════════════════════════════════${WHITE}\n"
-    printf "${RED}❌ ERRO CRÍTICO: Falha ao compilar e subir os contêineres Docker!${WHITE}\n"
-    printf "${YELLOW}   Diretório: ${BLUE}${compose_dir}${WHITE}\n"
-    printf "${RED}══════════════════════════════════════════════════════════════════${WHITE}\n"
-    sleep 5
-    exit 1
+    printf "${YELLOW} >> Alerta ao subir contêineres. Tentando auto-recuperação de portas e serviços...${WHITE}\n"
+    # Se a porta 5432 ainda estiver presa no host, remapeia para a próxima porta livre
+    if testar_porta_tcp_ocupada 5432; then
+      local nova_porta_db
+      nova_porta_db=$(localizador_porta_livre 5433)
+      printf "${YELLOW} >> Realocando porta host do PostgreSQL para ${nova_porta_db}...${WHITE}\n"
+      sed -i "s/^PORT_DB=.*/PORT_DB=${nova_porta_db}/" "${compose_dir}/.env" 2>/dev/null || true
+    fi
+    if testar_porta_tcp_ocupada 6379; then
+      local nova_porta_redis
+      nova_porta_redis=$(localizador_porta_livre 6380)
+      sed -i "s/^PORT_REDIS=.*/PORT_REDIS=${nova_porta_redis}/" "${compose_dir}/.env" 2>/dev/null || true
+    fi
+    docker compose -p amanda down 2>/dev/null || true
+    sleep 2
+    if ! docker compose -p amanda up -d; then
+      printf "${RED}══════════════════════════════════════════════════════════════════${WHITE}\n"
+      printf "${RED}❌ ERRO CRÍTICO: Falha ao compilar e subir os contêineres Docker!${WHITE}\n"
+      printf "${YELLOW}   Diretório: ${BLUE}${compose_dir}${WHITE}\n"
+      printf "${RED}══════════════════════════════════════════════════════════════════${WHITE}\n"
+      sleep 5
+      exit 1
+    fi
   fi
 
   # Localizar dinamicamente os nomes dos contêineres iniciados
