@@ -794,29 +794,83 @@ EOF
     fi
   fi
 
-  # Padronizar nomes para AMANDA (100% amanda_ nos contêineres, redes e volumes)
+  # Padronizar e otimizar docker-compose.yml com precisão total (100% amanda_, wuzapi oficial e api_oficial integrada)
   if [ -f "${compose_dir}/docker-compose.yml" ]; then
-    sed -i 's|container_name:[[:space:]]*multiflow_|container_name: amanda_|g' "${compose_dir}/docker-compose.yml" 2>/dev/null || true
-    sed -i 's|multiflow_net|amanda_net|g' "${compose_dir}/docker-compose.yml" 2>/dev/null || true
-    sed -i 's|multiflow_postgres|amanda_postgres|g' "${compose_dir}/docker-compose.yml" 2>/dev/null || true
-    sed -i 's|multiflow_pgbouncer|amanda_pgbouncer|g' "${compose_dir}/docker-compose.yml" 2>/dev/null || true
-    sed -i 's|multiflow_redis|amanda_redis|g' "${compose_dir}/docker-compose.yml" 2>/dev/null || true
-    sed -i 's|multiflow_backend|amanda_backend|g' "${compose_dir}/docker-compose.yml" 2>/dev/null || true
-    sed -i 's|multiflow_frontend|amanda_frontend|g' "${compose_dir}/docker-compose.yml" 2>/dev/null || true
-    sed -i 's|multiflow_transcricao|amanda_transcricao|g' "${compose_dir}/docker-compose.yml" 2>/dev/null || true
-    sed -i 's|multiflow_wuzapi|amanda_wuzapi|g' "${compose_dir}/docker-compose.yml" 2>/dev/null || true
-    sed -i 's|name:[[:space:]]*multiflow|name: amanda|g' "${compose_dir}/docker-compose.yml" 2>/dev/null || true
-    if ! grep -q "^name:" "${compose_dir}/docker-compose.yml"; then
-      sed -i '1i name: amanda' "${compose_dir}/docker-compose.yml"
-    fi
-  fi
+    printf "${PURPLE} >> Padronizando docker-compose.yml para AMANDA e integrando microsserviços...${WHITE}\n"
+    python3 - "${compose_dir}/docker-compose.yml" "${empresa:-amanda}" "${senha_deploy:-Acertitech13@}" << 'PYEOF'
+import sys, re
 
-  # Integrar serviço api_oficial no docker-compose.yml se não estiver presente
-  if [ -d "${compose_dir}/api_oficial" ] && ! grep -q "api_oficial:" "${compose_dir}/docker-compose.yml" 2>/dev/null; then
-    printf "${WHITE} >> Integrando API Oficial (Meta Cloud API) na stack docker-compose.yml...\n"
-    if grep -q "^volumes:" "${compose_dir}/docker-compose.yml"; then
-      sed -i '/^volumes:/i \  # ==========================================================\n  # 8. MICROSSERVIÇO: API OFICIAL (Meta WhatsApp Cloud API)\n  # ==========================================================\n  api_oficial:\n    build:\n      context: ./api_oficial\n      dockerfile: Dockerfile\n    container_name: amanda_apioficial\n    restart: always\n    depends_on:\n      postgres:\n        condition: service_healthy\n      redis:\n        condition: service_healthy\n    environment:\n      PORT: 6000\n      DATABASE_LINK: postgresql://${DB_USER:-amanda}:${DB_PASS:-Acertitech13@}@postgres:5432/api_oficial?schema=public\n      NAME_ADMIN: SetupAutomatizado\n      EMAIL_ADMIN: admin@amanda.com.br\n      PASSWORD_ADMIN: ${DB_PASS:-Acertitech13@}\n      JWT_SECRET: ${JWT_SECRET:-kZaOTd+YZpjRUyyuQUpigJaEMk4vcW4YOymKPZX0Ts8=}\n      URL_BACKEND_MULT100: ${BACKEND_URL:-http://backend:8080}\n      REDIS_URI: redis://redis:6379\n      TOKEN_ADMIN: adminpro\n      RABBITMQ_ENABLED_GLOBAL: "false"\n      TZ: America/Sao_Paulo\n    ports:\n      - "${PORT_APIOFICIAL:-6000}:6000"\n    networks:\n      - amanda_net\n' "${compose_dir}/docker-compose.yml"
-    fi
+compose_file = sys.argv[1]
+db_user = sys.argv[2]
+db_pass = sys.argv[3]
+
+with open(compose_file, "r", encoding="utf-8") as f:
+    content = f.read()
+
+# 1. name: amanda
+if not re.search(r"^name:\s*", content, re.M):
+    content = "name: amanda\n" + content
+
+# 2. Renomear container_name: multiflow_ para amanda_
+content = re.sub(r'container_name:\s*multiflow_', 'container_name: amanda_', content)
+content = content.replace('multiflow_net', 'amanda_net')
+content = content.replace('multiflow_postgres', 'amanda_postgres')
+content = content.replace('multiflow_pgbouncer', 'amanda_pgbouncer')
+content = content.replace('multiflow_redis', 'amanda_redis')
+content = content.replace('multiflow_backend', 'amanda_backend')
+content = content.replace('multiflow_frontend', 'amanda_frontend')
+content = content.replace('multiflow_transcricao', 'amanda_transcricao')
+content = content.replace('multiflow_wuzapi', 'amanda_wuzapi')
+
+# 3. Substituir APENAS o build do servico wuzapi por imagem oficial pré-compilada
+content = re.sub(
+    r'(^[ ]{2}wuzapi:[ ]*\n)[ ]{4}build:[ ]*\n(?:[ ]{6,}.*\n)*',
+    r'\1    image: asternic/wuzapi:latest\n',
+    content,
+    flags=re.M
+)
+
+# 4. Integrar api_oficial se nao estiver presente
+if "api_oficial:" not in content and re.search(r'\nvolumes:\s*\n', content):
+    api_oficial_block = f"""
+  # ==========================================================
+  # 8. MICROSSERVIÇO: API OFICIAL (Meta WhatsApp Cloud API)
+  # ==========================================================
+  api_oficial:
+    build:
+      context: ./api_oficial
+      dockerfile: Dockerfile
+    container_name: amanda_apioficial
+    restart: always
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      PORT: 6000
+      DATABASE_LINK: postgresql://{db_user}:{db_pass}@postgres:5432/api_oficial?schema=public
+      NAME_ADMIN: SetupAutomatizado
+      EMAIL_ADMIN: admin@amanda.com.br
+      PASSWORD_ADMIN: {db_pass}
+      JWT_SECRET: ${{JWT_SECRET:-kZaOTd+YZpjRUyyuQUpigJaEMk4vcW4YOymKPZX0Ts8=}}
+      URL_BACKEND_MULT100: http://backend:8080
+      REDIS_URI: redis://redis:6379
+      TOKEN_ADMIN: adminpro
+      RABBITMQ_ENABLED_GLOBAL: "false"
+      TZ: America/Sao_Paulo
+    ports:
+      - "${{PORT_APIOFICIAL:-6000}}:6000"
+    networks:
+      - amanda_net
+
+volumes:
+"""
+    content = re.sub(r'\nvolumes:\s*\n', api_oficial_block, content, count=1)
+
+with open(compose_file, "w", encoding="utf-8") as f:
+    f.write(content)
+PYEOF
   fi
 
   chown -R deploy:deploy "${app_dir}"
@@ -837,13 +891,6 @@ EOF
   docker volume create multiflow_backend_database 2>/dev/null || true
   docker volume create multiflow_backend_public 2>/dev/null || true
   docker volume create multiflow_wuzapi_data 2>/dev/null || true
-
-  # Assegurar componente WuzAPI com imagem oficial pré-compilada para deploy ultra-rápido
-  if grep -q "context:.*wuzapi" "${compose_dir}/docker-compose.yml" 2>/dev/null; then
-    printf "${PURPLE} >> Configurando WuzAPI para usar imagem oficial asternic/wuzapi:latest...${WHITE}\n"
-    sed -i '/wuzapi:/,/container_name:/ { /build:/d; /context:.*wuzapi/d; /dockerfile:.*/d; }' "${compose_dir}/docker-compose.yml"
-    sed -i '/wuzapi:/a \    image: asternic/wuzapi:latest' "${compose_dir}/docker-compose.yml"
-  fi
 
   # Subir stack
   banner
@@ -1004,9 +1051,21 @@ atualizar_amanda_docker() {
   if [ ! -d "${compose_dir}/wuzapi" ]; then
     git clone --depth 1 https://github.com/asternic/wuzapi.git "${compose_dir}/wuzapi" 2>/dev/null || true
   fi
-  if [ ! -f "${compose_dir}/wuzapi/Dockerfile" ] && grep -q "context:.*wuzapi" "${compose_dir}/docker-compose.yml" 2>/dev/null; then
-    sed -i '/wuzapi:/,/container_name:/ { /build:/d; /context:.*wuzapi/d; /dockerfile:.*/d; }' "${compose_dir}/docker-compose.yml"
-    sed -i '/wuzapi:/a \    image: asternic/wuzapi:latest' "${compose_dir}/docker-compose.yml"
+  if [ -f "${compose_dir}/docker-compose.yml" ]; then
+    python3 - "${compose_dir}/docker-compose.yml" << 'PYEOF'
+import sys, re
+compose_file = sys.argv[1]
+with open(compose_file, "r", encoding="utf-8") as f:
+    content = f.read()
+content = re.sub(
+    r'(^[ ]{2}wuzapi:[ ]*\n)[ ]{4}build:[ ]*\n(?:[ ]{6,}.*\n)*',
+    r'\1    image: asternic/wuzapi:latest\n',
+    content,
+    flags=re.M
+)
+with open(compose_file, "w", encoding="utf-8") as f:
+    f.write(content)
+PYEOF
   fi
 
   docker compose -p amanda pull 2>/dev/null || true
