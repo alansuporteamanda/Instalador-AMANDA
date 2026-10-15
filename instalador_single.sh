@@ -803,10 +803,15 @@ testar_porta_tcp_ocupada() {
   local p="$1"
   if command -v ss >/dev/null 2>&1; then
     ss -tlpn 2>/dev/null | grep -qE "[:.]${p}\b" && return 0
-  elif command -v netstat >/dev/null 2>&1; then
+  fi
+  if command -v netstat >/dev/null 2>&1; then
     netstat -tlpn 2>/dev/null | grep -qE "[:.]${p}\b" && return 0
-  elif command -v lsof >/dev/null 2>&1; then
+  fi
+  if command -v lsof >/dev/null 2>&1; then
     lsof -iTCP:"$p" -sTCP:LISTEN >/dev/null 2>&1 && return 0
+  fi
+  if command -v docker >/dev/null 2>&1; then
+    docker ps --format '{{.Ports}}' 2>/dev/null | grep -qE "(^|[^0-9])${p}->" && return 0
   fi
   (echo >/dev/tcp/127.0.0.1/"$p") 2>/dev/null && return 0
   return 1
@@ -4063,6 +4068,223 @@ menu_ferramentas() {
   done
 }
 
+# ================================================================
+# DESINSTALADOR OFICIAL DA PLATAFORMA (PRESERVANDO OU APAGANDO DADOS)
+# ================================================================
+desinstalar_amanda_preservando_dados() {
+  banner
+  printf "${WHITE}╔══════════════════════════════════════════════════════════════════════╗${WHITE}\n"
+  printf "${WHITE}║       ${GREEN}DESINSTALAÇÃO PRESERVANDO BANCOS DE DADOS E VOLUMES${WHITE}            ║${WHITE}\n"
+  printf "${WHITE}╚══════════════════════════════════════════════════════════════════════╝${WHITE}\n"
+  echo
+  printf "${YELLOW} >> Esta ação irá parar e remover todos os contêineres e códigos da AMANDA,${WHITE}\n"
+  printf "${YELLOW}    mas seus BANCOS DE DADOS (PostgreSQL, Redis, WuzAPI) serão MANTIDOS.${WHITE}\n\n"
+  printf "${WHITE} >> Deseja confirmar a desinstalação? (S/N): ${WHITE}"
+  read -r conf_desinstala
+  conf_desinstala=$(echo "${conf_desinstala}" | tr '[:lower:]' '[:upper:]')
+  if [ "$conf_desinstala" != "S" ]; then
+    printf "\n${YELLOW} >> Operação cancelada pelo usuário.${WHITE}\n"
+    sleep 2
+    return 0
+  fi
+
+  carregar_variaveis
+  local app_dir="/home/deploy/${empresa:-amanda}"
+  local compose_dir
+  compose_dir=$(localizar_diretorio_compose "${app_dir}")
+
+  banner
+  printf "${WHITE} >> 1. Parando e removendo contêineres Docker (Preservando Volumes)...${WHITE}\n"
+  echo
+  if [ -d "${compose_dir}" ] && [ -f "${compose_dir}/docker-compose.yml" ]; then
+    (cd "${compose_dir}" && docker compose -p amanda down 2>/dev/null || true)
+  fi
+  docker compose -p amanda down 2>/dev/null || true
+
+  local c
+  for c in amanda_postgres amanda_redis amanda_pgbouncer amanda_backend amanda_frontend amanda_apioficial amanda_wuzapi amanda_campaign_dispatcher amanda_transcricao; do
+    docker rm -f "$c" 2>/dev/null || true
+  done
+  local extras
+  extras=$(docker ps -a --filter "name=amanda_" --filter "name=multiflow_" -q 2>/dev/null)
+  [ -n "$extras" ] && docker rm -f $extras 2>/dev/null || true
+
+  printf "${WHITE} >> 2. Removendo configurações do Nginx...${WHITE}\n"
+  rm -f /etc/nginx/sites-enabled/${empresa:-amanda}* 2>/dev/null || true
+  rm -f /etc/nginx/sites-available/${empresa:-amanda}* 2>/dev/null || true
+  rm -f /etc/nginx/sites-enabled/multiflow* 2>/dev/null || true
+  rm -f /etc/nginx/sites-available/multiflow* 2>/dev/null || true
+  systemctl reload nginx 2>/dev/null || true
+
+  printf "${WHITE} >> 3. Limpando processos PM2...${WHITE}\n"
+  if command -v pm2 >/dev/null 2>&1; then
+    pm2 delete all 2>/dev/null || true
+    pm2 save 2>/dev/null || true
+  fi
+
+  printf "${WHITE} >> 4. Removendo cronjobs da aplicação...${WHITE}\n"
+  crontab -l 2>/dev/null | grep -v "${empresa:-amanda}" | grep -v "multiflow" | crontab - 2>/dev/null || true
+
+  printf "${WHITE} >> 5. Removendo diretório da aplicação (${app_dir})...${WHITE}\n"
+  rm -rf "${app_dir}" 2>/dev/null || true
+  [ -d "/home/deploy/multiflow" ] && rm -rf "/home/deploy/multiflow" 2>/dev/null || true
+
+  printf "${WHITE} >> 6. Limpando arquivos de etapas...${WHITE}\n"
+  rm -f "${ARQUIVO_ETAPAS}" /root/etapas_instalacao.txt 2>/dev/null || true
+
+  echo
+  printf "${GREEN}══════════════════════════════════════════════════════════════════${WHITE}\n"
+  printf "${GREEN}✅ AMANDA DESINSTALADA COM SUCESSO!${WHITE}\n"
+  printf "${WHITE}   Os contêineres e códigos foram removidos.\n"
+  printf "${GREEN}   ✓ Volumes de dados preservados na VPS:${WHITE}\n"
+  docker volume ls --filter "name=amanda_" --filter "name=multiflow_" --format "     - {{.Name}}" 2>/dev/null || true
+  printf "${GREEN}══════════════════════════════════════════════════════════════════${WHITE}\n\n"
+  printf "${WHITE}Pressione Enter para voltar ao menu...${WHITE}"
+  read -r
+}
+
+desinstalar_amanda_apagando_dados() {
+  banner
+  printf "${RED}╔══════════════════════════════════════════════════════════════════════╗${WHITE}\n"
+  printf "${RED}║  ⚠️  AVISO DE SEGURANÇA: PERIGO CRÍTICO DE PERDA TOTAL DE DADOS!    ║${WHITE}\n"
+  printf "${RED}╚══════════════════════════════════════════════════════════════════════╝${WHITE}\n"
+  echo
+  printf "${RED} Esta ação é TOTALMENTE DESTRUTIVA e NÃO PODERÁ SER DESFEITA!${WHITE}\n\n"
+  printf "${YELLOW} Ao prosseguir com esta opção, serão APAGADOS PERMANENTEMENTE:${WHITE}\n"
+  printf "   ${RED}✖${WHITE} Todos os Bancos de Dados PostgreSQL (mensagens, conversas, tickets, clientes, funis)\n"
+  printf "   ${RED}✖${WHITE} Todas as Filas e Cache Redis\n"
+  printf "   ${RED}✖${WHITE} Todas as sessões salvas de WhatsApp (WuzAPI / Baileys)\n"
+  printf "   ${RED}✖${WHITE} Todos os arquivos de mídia (áudios gravados, fotos, anexos, documentos)\n"
+  printf "   ${RED}✖${WHITE} Todos os Volumes Docker persistentes da AMANDA\n"
+  printf "   ${RED}✖${WHITE} Todos os contêineres e imagens Docker da AMANDA\n"
+  printf "   ${RED}✖${WHITE} Todo o código-fonte em /home/deploy e configurações do Nginx\n\n"
+  printf "${RED} ⚠️  SE VOCÊ NÃO POSSUI UM BACKUP EXTERNO, TODOS OS DADOS SERÃO PERDIDOS!${WHITE}\n\n"
+
+  printf "${WHITE} >> Tem certeza absoluta que deseja DESTRUIR TODOS OS DADOS e desinstalar? (S/N): ${WHITE}"
+  read -r resp_conf1
+  resp_conf1=$(echo "${resp_conf1}" | tr '[:lower:]' '[:upper:]')
+  if [ "$resp_conf1" != "S" ]; then
+    printf "\n${GREEN} >> Operação cancelada! Nenhum dado foi alterado.${WHITE}\n"
+    sleep 2
+    return 0
+  fi
+
+  echo
+  printf "${RED} >> [CONFIRMAÇÃO FINAL ANTI-ACIDENTE]:${WHITE}\n"
+  printf "${WHITE} >> Para confirmar a DELEÇÃO PERMANENTE de todos os bancos e dados, digite exatamente: ${RED}DELETAR TUDO${WHITE}\n"
+  read -p "> " resp_conf2
+  if [ "$resp_conf2" != "DELETAR TUDO" ]; then
+    printf "\n${GREEN} >> Confirmação incorreta! Operação cancelada com segurança. Nenhum dado foi afetado.${WHITE}\n"
+    sleep 3
+    return 0
+  fi
+
+  carregar_variaveis
+  local app_dir="/home/deploy/${empresa:-amanda}"
+  local compose_dir
+  compose_dir=$(localizar_diretorio_compose "${app_dir}")
+
+  banner
+  printf "${RED} >> 1. Parando e destruindo contêineres e volumes da stack Compose...${WHITE}\n"
+  echo
+  if [ -d "${compose_dir}" ] && [ -f "${compose_dir}/docker-compose.yml" ]; then
+    (cd "${compose_dir}" && docker compose -p amanda down -v --remove-orphans 2>/dev/null || true)
+  fi
+  docker compose -p amanda down -v --remove-orphans 2>/dev/null || true
+
+  printf "${RED} >> 2. Forçando remoção de contêineres AMANDA remanescentes...${WHITE}\n"
+  local c
+  for c in amanda_postgres amanda_redis amanda_pgbouncer amanda_backend amanda_frontend amanda_apioficial amanda_wuzapi amanda_campaign_dispatcher amanda_transcricao; do
+    docker rm -f "$c" 2>/dev/null || true
+  done
+  local extras
+  extras=$(docker ps -a --filter "name=amanda_" --filter "name=multiflow_" -q 2>/dev/null)
+  [ -n "$extras" ] && docker rm -f $extras 2>/dev/null || true
+
+  printf "${RED} >> 3. APAGANDO VOLUMES DE DADOS PERSISTENTES (PostgreSQL, Redis, WuzAPI)...${WHITE}\n"
+  local vol
+  for vol in amanda_postgres_data amanda_redis_data amanda_backend_database amanda_backend_public amanda_wuzapi_data \
+             multiflow_postgres_data multiflow_redis_data multiflow_backend_database multiflow_backend_public multiflow_wuzapi_data; do
+    docker volume rm -f "$vol" 2>/dev/null || true
+  done
+  docker volume rm -f $(docker volume ls -q | grep -E 'amanda|multiflow') 2>/dev/null || true
+
+  printf "${RED} >> 4. Removendo redes Docker...${WHITE}\n"
+  docker network rm amanda_net multiflow_net 2>/dev/null || true
+
+  printf "${RED} >> 5. Removendo imagens Docker compiladas da AMANDA...${WHITE}\n"
+  docker rmi -f $(docker images | grep -E 'amanda|multiflow' | awk '{print $3}') 2>/dev/null || true
+
+  printf "${RED} >> 6. Removendo configurações do Nginx...${WHITE}\n"
+  rm -f /etc/nginx/sites-enabled/${empresa:-amanda}* 2>/dev/null || true
+  rm -f /etc/nginx/sites-available/${empresa:-amanda}* 2>/dev/null || true
+  rm -f /etc/nginx/sites-enabled/multiflow* 2>/dev/null || true
+  rm -f /etc/nginx/sites-available/multiflow* 2>/dev/null || true
+  systemctl reload nginx 2>/dev/null || true
+
+  printf "${RED} >> 7. Limpando processos PM2 e cronjobs...${WHITE}\n"
+  if command -v pm2 >/dev/null 2>&1; then
+    pm2 delete all 2>/dev/null || true
+    pm2 save 2>/dev/null || true
+  fi
+  crontab -l 2>/dev/null | grep -v "${empresa:-amanda}" | grep -v "multiflow" | crontab - 2>/dev/null || true
+
+  printf "${RED} >> 8. Apagando código-fonte e dados em disco (${app_dir})...${WHITE}\n"
+  rm -rf "${app_dir}" 2>/dev/null || true
+  [ -d "/home/deploy/multiflow" ] && rm -rf "/home/deploy/multiflow" 2>/dev/null || true
+
+  printf "${RED} >> 9. Limpando arquivos de configuração e etapas do instalador...${WHITE}\n"
+  rm -f "${ARQUIVO_ETAPAS}" /root/etapas_instalacao.txt 2>/dev/null || true
+  rm -f "${ARQUIVO_VARIAVEIS}" /root/variaveis_instalacao.txt 2>/dev/null || true
+  rm -f ALTA_PERFORMANCE_MODE /root/ALTA_PERFORMANCE_MODE 2>/dev/null || true
+
+  echo
+  printf "${RED}══════════════════════════════════════════════════════════════════${WHITE}\n"
+  printf "${RED}💥 DESINSTALAÇÃO COMPLETA E LIMPEZA DE DADOS CONCLUÍDA!${WHITE}\n"
+  printf "${WHITE}   Todos os contêineres, códigos e bancos de dados foram removidos da VPS.\n"
+  printf "${RED}══════════════════════════════════════════════════════════════════${WHITE}\n\n"
+  printf "${WHITE}Pressione Enter para voltar ao menu...${WHITE}"
+  read -r
+}
+
+menu_desinstalar_plataforma() {
+  while true; do
+    banner
+    printf "${WHITE}╔══════════════════════════════════════════════════════════════════════╗${WHITE}\n"
+    printf "${WHITE}║             ${PURPLE}DESINSTALADOR OFICIAL DA PLATAFORMA ${nome_titulo:-AMANDA}${WHITE}             ║${WHITE}\n"
+    printf "${WHITE}╚══════════════════════════════════════════════════════════════════════╝${WHITE}\n"
+    echo
+    printf "   ${WHITE}Escolha como deseja proceder com a desinstalação:${WHITE}\n\n"
+    printf "   [${BLUE}1${WHITE}] ${GREEN}Desinstalar ${nome_titulo} PRESERVANDO os Bancos de Dados${WHITE}\n"
+    printf "       ${GRAY}(Remove contêineres, código e proxy Nginx, mas MANTÉM todos os volumes${WHITE}\n"
+    printf "       ${GRAY} e dados de PostgreSQL, Redis, WuzAPI e mídias salvos para reinstalação)${WHITE}\n\n"
+    printf "   [${BLUE}2${WHITE}] ${RED}Desinstalar ${nome_titulo} e APAGAR TODOS OS BANCOS DE DADOS (Destrutivo)${WHITE}\n"
+    printf "       ${YELLOW}(Wipeout total: remove contêineres, código, bancos, mídias e volumes.${WHITE}\n"
+    printf "       ${RED} ATENÇÃO: Todos os dados serão PERDIDOS PERMANENTEMENTE!)${WHITE}\n\n"
+    printf "   [${BLUE}0${WHITE}] Voltar ao Menu Principal\n\n"
+    printf "${WHITE}   Escolha uma opção: ${PURPLE}"
+    read -r op_desinstala
+
+    case "$op_desinstala" in
+      1)
+        desinstalar_amanda_preservando_dados
+        return
+        ;;
+      2)
+        desinstalar_amanda_apagando_dados
+        return
+        ;;
+      0)
+        return
+        ;;
+      *)
+        printf "${RED}Opção inválida!${WHITE}\n"
+        sleep 2
+        ;;
+    esac
+  done
+}
+
 # Menu principal (100% Docker)
 menu() {
   while true; do
@@ -4077,6 +4299,7 @@ menu() {
     printf "   [${BLUE}6${WHITE}] Fazer Backup do Banco PostgreSQL\n"
     printf "   [${BLUE}7${WHITE}] Restaurar Backup do Banco PostgreSQL\n"
     printf "   [${BLUE}8${WHITE}] Menu de Ferramentas Adicionais\n"
+    printf "   [${BLUE}9${WHITE}] Desinstalar Plataforma ${nome_titulo}\n"
     printf "   [${BLUE}0${WHITE}] Sair\n"
     echo
     read -p "> " option
@@ -4104,6 +4327,9 @@ menu() {
       ;;
     8)
       menu_ferramentas
+      ;;
+    9)
+      menu_desinstalar_plataforma
       ;;
     0)
       sair
@@ -4742,51 +4968,120 @@ define_proxy_base() {
   export proxy
 }
 
-# Define portas backend e frontend
+# Define portas backend e frontend com exibição de status em tempo real
 define_portas_base() {
   banner
-  printf "${WHITE} >> Usar as portas padrão para Backend (8080) e Frontend (3000) ? (S/N): ${WHITE}\n"
+  printf "${WHITE}╔══════════════════════════════════════════════════════════════════════╗${WHITE}\n"
+  printf "${WHITE}║       ${PURPLE}EXIBIÇÃO DO STATUS DAS PORTAS EM TEMPO REAL NA VPS${WHITE}            ║${WHITE}\n"
+  printf "${WHITE}╚══════════════════════════════════════════════════════════════════════╝${WHITE}\n"
   echo
-  read -p "> " use_default_ports
-  use_default_ports=$(echo "${use_default_ports}" | tr '[:upper:]' '[:lower:]')
-  echo
+
+  # Pré-calcular resolução automática das portas internas
+  resolver_portas_automaticas >/dev/null 2>&1 || true
+
+  local st_be st_fe st_db st_redis st_pgb st_transc st_wuzapi st_disp st_oficial
+  testar_porta_tcp_ocupada 8080 && st_be="${RED}[Em uso - Requer alteração]${WHITE}" || st_be="${GREEN}[Livre - Pronto para uso]${WHITE}"
+  testar_porta_tcp_ocupada 3000 && st_fe="${RED}[Em uso - Requer alteração]${WHITE}" || st_fe="${GREEN}[Livre - Pronto para uso]${WHITE}"
+
+  if [ "$PORT_DB" = "5432" ]; then
+    st_db="${GREEN}[Livre - Porta 5432]${WHITE}"
+  else
+    st_db="${YELLOW}[Em uso -> Alterado automaticamente para ${PORT_DB}]${WHITE}"
+  fi
+
+  if [ "$PORT_REDIS" = "6379" ]; then
+    st_redis="${GREEN}[Livre - Porta 6379]${WHITE}"
+  else
+    st_redis="${YELLOW}[Em uso -> Alterado automaticamente para ${PORT_REDIS}]${WHITE}"
+  fi
+
+  if [ "$PORT_PGBOUNCER" = "6432" ]; then
+    st_pgb="${GREEN}[Livre - Porta 6432]${WHITE}"
+  else
+    st_pgb="${YELLOW}[Em uso -> Alterado automaticamente para ${PORT_PGBOUNCER}]${WHITE}"
+  fi
+
+  if [ "$PORT_TRANSCRIBER" = "4002" ]; then
+    st_transc="${GREEN}[Livre - Porta 4002]${WHITE}"
+  else
+    st_transc="${YELLOW}[Em uso -> Alterado automaticamente para ${PORT_TRANSCRIBER}]${WHITE}"
+  fi
+
+  if [ "$PORT_WUZAPI" = "8090" ]; then
+    st_wuzapi="${GREEN}[Livre - Porta 8090]${WHITE}"
+  else
+    st_wuzapi="${YELLOW}[Em uso -> Alterado automaticamente para ${PORT_WUZAPI}]${WHITE}"
+  fi
+
+  if [ "$PORT_DISPATCHER" = "8095" ]; then
+    st_disp="${GREEN}[Livre - Porta 8095]${WHITE}"
+  else
+    st_disp="${YELLOW}[Em uso -> Alterado automaticamente para ${PORT_DISPATCHER}]${WHITE}"
+  fi
+
+  if [ "$PORT_APIOFICIAL" = "6000" ]; then
+    st_oficial="${GREEN}[Livre - Porta 6000]${WHITE}"
+  else
+    st_oficial="${YELLOW}[Em uso -> Alterado automaticamente para ${PORT_APIOFICIAL}]${WHITE}"
+  fi
+
+  printf "   ${WHITE}● ${CYAN}PORTAS EDITÁVEIS PELO USUÁRIO:${WHITE}\n"
+  printf "     1) Backend AMANDA (API):       ${YELLOW}8080${WHITE}  ---> %b\n" "$st_be"
+  printf "     2) Frontend AMANDA (Web):      ${YELLOW}3000${WHITE}  ---> %b\n\n" "$st_fe"
+
+  printf "   ${WHITE}● ${CYAN}PORTAS COM AJUSTE 100%% AUTOMÁTICO (+1 ATÉ ACHAR LIVRE):${WHITE}\n"
+  printf "     3) PostgreSQL (Database):      ${YELLOW}5432${WHITE}  ---> %b\n" "$st_db"
+  printf "     4) Redis (Filas e Cache):      ${YELLOW}6379${WHITE}  ---> %b\n" "$st_redis"
+  printf "     5) PgBouncer (Pool de Conexão): ${YELLOW}6432${WHITE}  ---> %b\n" "$st_pgb"
+  printf "     6) API Transcrição de Áudio:   ${YELLOW}4002${WHITE}  ---> %b\n" "$st_transc"
+  printf "     7) Wuzapi / WhatsApp Go:       ${YELLOW}8090${WHITE}  ---> %b\n" "$st_wuzapi"
+  printf "     8) GoFlow Campaign Dispatcher: ${YELLOW}8095${WHITE}  ---> %b\n" "$st_disp"
+  printf "     9) API Oficial Meta WhatsApp:  ${YELLOW}6000${WHITE}  ---> %b\n\n" "$st_oficial"
+  printf "   ${WHITE}ℹ️  ${YELLOW}Nota: PostgreSQL, Redis e PgBouncer serão alterados automaticamente caso em uso.${WHITE}\n"
+  printf "   ${WHITE}ℹ️  ${YELLOW}As únicas portas personalizáveis nesta etapa são as do Frontend e Backend.${WHITE}\n\n"
 
   default_backend_port=8080
   default_frontend_port=3000
+
+  printf "${WHITE} >> Usar as portas padrão para Backend (8080) e Frontend (3000) ? (S/N) [Padrão: S]: ${WHITE}\n"
+  echo
+  read -p "> " use_default_ports
+  use_default_ports=${use_default_ports:-s}
+  use_default_ports=$(echo "${use_default_ports}" | tr '[:upper:]' '[:lower:]')
+  echo
 
   if [ "${use_default_ports}" = "s" ]; then
     backend_port=${default_backend_port}
     frontend_port=${default_frontend_port}
   else
     while true; do
-      printf "${WHITE} >> Qual porta deseja para o Backend? ${WHITE}\n"
+      printf "${WHITE} >> Qual porta deseja para o Backend? [padrão: 8080]: ${WHITE}\n"
       echo
       read -p "> " backend_port
+      backend_port=${backend_port:-8080}
       echo
-      if ! lsof -i:${backend_port} &>/dev/null; then
+      if ! testar_porta_tcp_ocupada "${backend_port}"; then
         break
       else
-        printf "${RED} >> A porta ${backend_port} já está em uso. Por favor, escolha outra.${WHITE}\n"
-        echo
+        printf "${RED} >> A porta ${backend_port} já está em uso na VPS. Por favor, escolha outra.${WHITE}\n\n"
       fi
     done
 
     while true; do
-      printf "${WHITE} >> Qual porta deseja para o Frontend? ${WHITE}\n"
+      printf "${WHITE} >> Qual porta deseja para o Frontend? [padrão: 3000]: ${WHITE}\n"
       echo
       read -p "> " frontend_port
+      frontend_port=${frontend_port:-3000}
       echo
-      if ! lsof -i:${frontend_port} &>/dev/null; then
+      if ! testar_porta_tcp_ocupada "${frontend_port}"; then
         break
       else
-        printf "${RED} >> A porta ${frontend_port} já está em uso. Por favor, escolha outra.${WHITE}\n"
-        echo
+        printf "${RED} >> A porta ${frontend_port} já está em uso na VPS. Por favor, escolha outra.${WHITE}\n\n"
       fi
     done
   fi
 
-  # Identifica se as portas padrão estão em uso (Postgres 5432, Redis 6379, PgBouncer 6432)
-  # Se estiverem em uso, adiciona automaticamente na porta seguinte (+1)
+  # Executa a resolução final e exibe os avisos de portas ajustadas caso necessário
   resolver_portas_automaticas
   sleep 1
 }
@@ -9880,6 +10175,12 @@ exec_ferramenta_direta() {
 if [ "${1:-}" = "--exec-ferramenta" ] && [ -n "${2:-}" ]; then
   exec_ferramenta_direta "$2"
   exit $?
+fi
+
+if [ "${1:-}" = "--desinstalar" ]; then
+  carregar_variaveis
+  menu_desinstalar_plataforma
+  exit 0
 fi
 
 carregar_variaveis

@@ -112,10 +112,15 @@ testar_porta_tcp_ocupada() {
   local p="$1"
   if command -v ss >/dev/null 2>&1; then
     ss -tlpn 2>/dev/null | grep -qE "[:.]${p}\b" && return 0
-  elif command -v netstat >/dev/null 2>&1; then
+  fi
+  if command -v netstat >/dev/null 2>&1; then
     netstat -tlpn 2>/dev/null | grep -qE "[:.]${p}\b" && return 0
-  elif command -v lsof >/dev/null 2>&1; then
+  fi
+  if command -v lsof >/dev/null 2>&1; then
     lsof -iTCP:"$p" -sTCP:LISTEN >/dev/null 2>&1 && return 0
+  fi
+  if command -v docker >/dev/null 2>&1; then
+    docker ps --format '{{.Ports}}' 2>/dev/null | grep -qE "(^|[^0-9])${p}->" && return 0
   fi
   (echo >/dev/tcp/127.0.0.1/"$p") 2>/dev/null && return 0
   return 1
