@@ -195,6 +195,10 @@ salvar_variaveis() {
   echo "PORT_DB=${PORT_DB:-5432}" >>$ARQUIVO_VARIAVEIS
   echo "PORT_REDIS=${PORT_REDIS:-6379}" >>$ARQUIVO_VARIAVEIS
   echo "PORT_PGBOUNCER=${PORT_PGBOUNCER:-6432}" >>$ARQUIVO_VARIAVEIS
+  echo "PORT_TRANSCRIBER=${PORT_TRANSCRIBER:-4002}" >>$ARQUIVO_VARIAVEIS
+  echo "PORT_WUZAPI=${PORT_WUZAPI:-8090}" >>$ARQUIVO_VARIAVEIS
+  echo "PORT_DISPATCHER=${PORT_DISPATCHER:-8095}" >>$ARQUIVO_VARIAVEIS
+  echo "PORT_APIOFICIAL=${PORT_APIOFICIAL:-6000}" >>$ARQUIVO_VARIAVEIS
   # Salvar versão (usar underscore se for "Mais Recente" para evitar problemas com espaços)
   local versao_para_salvar="${versao_instalacao}"
   if [ "${versao_instalacao}" = "Mais Recente" ] || [ "${versao_instalacao}" = "Mais_Recente" ]; then
@@ -220,6 +224,10 @@ carregar_variaveis() {
     PORT_DB="${PORT_DB:-5432}"
     PORT_REDIS="${PORT_REDIS:-6379}"
     PORT_PGBOUNCER="${PORT_PGBOUNCER:-6432}"
+    PORT_TRANSCRIBER="${PORT_TRANSCRIBER:-4002}"
+    PORT_WUZAPI="${PORT_WUZAPI:-8090}"
+    PORT_DISPATCHER="${PORT_DISPATCHER:-8095}"
+    PORT_APIOFICIAL="${PORT_APIOFICIAL:-6000}"
   else
     empresa="amanda"
     nome_titulo="AMANDA"
@@ -227,6 +235,10 @@ carregar_variaveis() {
     PORT_DB="5432"
     PORT_REDIS="6379"
     PORT_PGBOUNCER="6432"
+    PORT_TRANSCRIBER="4002"
+    PORT_WUZAPI="8090"
+    PORT_DISPATCHER="8095"
+    PORT_APIOFICIAL="6000"
   fi
 }
 
@@ -342,9 +354,9 @@ atualizar_nginx_e_ssl_dominio() {
 
   local empresa="amanda"
   local site_conf="/etc/nginx/sites-available/${empresa}-${servico}"
-  local porta_local=3000
-  [ "$servico" = "backend" ] && porta_local=8080
-  [ "$servico" = "api_oficial" ] && porta_local=6000
+  local porta_local=${frontend_port:-3000}
+  [ "$servico" = "backend" ] && porta_local=${backend_port:-8080}
+  [ "$servico" = "api_oficial" ] && porta_local=${PORT_APIOFICIAL:-6000}
 
   banner
   printf "${PURPLE} >> Atualizando configuração do Nginx para ${servico} (${novo_host})...${WHITE}\n"
@@ -808,12 +820,61 @@ proxima_porta_livre() {
   printf '%s\n' "$p"
 }
 
+sincronizar_porta_env() {
+  local key="$1"
+  local val="$2"
+  local file="$3"
+  if grep -q "^${key}=" "$file" 2>/dev/null; then
+    sed -i "s|^${key}=.*|${key}=${val}|" "$file" 2>/dev/null || true
+  else
+    echo "${key}=${val}" >> "$file"
+  fi
+}
+
+sincronizar_todas_portas_env() {
+  local file="${1:-${compose_dir}/.env}"
+  [ ! -f "$file" ] && return 0
+  sincronizar_porta_env "PORT_DB" "${PORT_DB:-5432}" "$file"
+  sincronizar_porta_env "PORT_REDIS" "${PORT_REDIS:-6379}" "$file"
+  sincronizar_porta_env "PORT_PGBOUNCER" "${PORT_PGBOUNCER:-6432}" "$file"
+  sincronizar_porta_env "PORT_TRANSCRIBER" "${PORT_TRANSCRIBER:-4002}" "$file"
+  sincronizar_porta_env "PORT_WUZAPI" "${PORT_WUZAPI:-8090}" "$file"
+  sincronizar_porta_env "PORT_DISPATCHER" "${PORT_DISPATCHER:-8095}" "$file"
+  sincronizar_porta_env "PORT_APIOFICIAL" "${PORT_APIOFICIAL:-6000}" "$file"
+}
+
+limpar_conteineres_conflitantes() {
+  local compose_dir_alvo="${1:-${compose_dir:-}}"
+  if [ -n "$compose_dir_alvo" ] && [ -f "${compose_dir_alvo}/docker-compose.yml" ]; then
+    (cd "$compose_dir_alvo" && docker compose -p amanda down 2>/dev/null || true)
+  fi
+  docker compose -p amanda down 2>/dev/null || true
+
+  local c
+  for c in amanda_postgres amanda_redis amanda_pgbouncer amanda_backend amanda_frontend amanda_apioficial amanda_wuzapi amanda_campaign_dispatcher amanda_transcricao; do
+    if docker ps -a --format '{{.Names}}' | grep -qw "$c"; then
+      docker rm -f "$c" >/dev/null 2>&1 || true
+    fi
+  done
+
+  local extras
+  extras=$(docker ps -a --filter "name=amanda_" --filter "name=multiflow_" -q 2>/dev/null)
+  if [ -n "$extras" ]; then
+    docker rm -f $extras >/dev/null 2>&1 || true
+  fi
+  sleep 1
+}
+
 resolver_portas_automaticas() {
   PORT_DB=$(proxima_porta_livre 5432)
   PORT_REDIS=$(proxima_porta_livre 6379)
   PORT_PGBOUNCER=$(proxima_porta_livre 6432)
+  PORT_TRANSCRIBER=$(proxima_porta_livre 4002)
+  PORT_WUZAPI=$(proxima_porta_livre 8090)
+  PORT_DISPATCHER=$(proxima_porta_livre 8095)
+  PORT_APIOFICIAL=$(proxima_porta_livre 6000)
 
-  export PORT_DB PORT_REDIS PORT_PGBOUNCER
+  export PORT_DB PORT_REDIS PORT_PGBOUNCER PORT_TRANSCRIBER PORT_WUZAPI PORT_DISPATCHER PORT_APIOFICIAL
 
   if [ "$PORT_DB" != "5432" ]; then
     printf "${YELLOW} >> Porta host 5432 em uso. Postgres Docker alocado automaticamente na porta ${PORT_DB} (5432 + $((PORT_DB - 5432))).${WHITE}\n"
@@ -824,15 +885,18 @@ resolver_portas_automaticas() {
   if [ "$PORT_PGBOUNCER" != "6432" ]; then
     printf "${YELLOW} >> Porta host 6432 em uso. PgBouncer Docker alocado automaticamente na porta ${PORT_PGBOUNCER} (6432 + $((PORT_PGBOUNCER - 6432))).${WHITE}\n"
   fi
-}
-
-limpar_conteineres_conflitantes() {
-  local c
-  for c in amanda_postgres amanda_redis amanda_pgbouncer amanda_backend amanda_frontend amanda_apioficial amanda_wuzapi amanda_campaign_dispatcher amanda_transcricao; do
-    if docker ps -a --format '{{.Names}}' | grep -qw "$c"; then
-      docker rm -f "$c" >/dev/null 2>&1 || true
-    fi
-  done
+  if [ "$PORT_TRANSCRIBER" != "4002" ]; then
+    printf "${YELLOW} >> Porta host 4002 em uso. Transcrição Docker alocada automaticamente na porta ${PORT_TRANSCRIBER} (4002 + $((PORT_TRANSCRIBER - 4002))).${WHITE}\n"
+  fi
+  if [ "$PORT_WUZAPI" != "8090" ]; then
+    printf "${YELLOW} >> Porta host 8090 em uso. Wuzapi Docker alocado automaticamente na porta ${PORT_WUZAPI} (8090 + $((PORT_WUZAPI - 8090))).${WHITE}\n"
+  fi
+  if [ "$PORT_DISPATCHER" != "8095" ]; then
+    printf "${YELLOW} >> Porta host 8095 em uso. Dispatcher Docker alocado automaticamente na porta ${PORT_DISPATCHER} (8095 + $((PORT_DISPATCHER - 8095))).${WHITE}\n"
+  fi
+  if [ "$PORT_APIOFICIAL" != "6000" ]; then
+    printf "${YELLOW} >> Porta host 6000 em uso. API Oficial Docker alocada automaticamente na porta ${PORT_APIOFICIAL} (6000 + $((PORT_APIOFICIAL - 6000))).${WHITE}\n"
+  fi
 }
 
 # ================================================================
@@ -892,13 +956,13 @@ FRONTEND_URL=${subdominio_frontend}
 URL_API_OFICIAL=${subdominio_oficial}
 PORT_BACKEND=${backend_port:-8080}
 PORT_FRONTEND=${frontend_port:-3000}
-PORT_APIOFICIAL=6000
+PORT_APIOFICIAL=${PORT_APIOFICIAL:-6000}
 PORT_DB=${PORT_DB:-5432}
 PORT_PGBOUNCER=${PORT_PGBOUNCER:-6432}
 PORT_REDIS=${PORT_REDIS:-6379}
-PORT_WUZAPI=8090
-PORT_DISPATCHER=8095
-PORT_TRANSCRIBER=4002
+PORT_WUZAPI=${PORT_WUZAPI:-8090}
+PORT_DISPATCHER=${PORT_DISPATCHER:-8095}
+PORT_TRANSCRIBER=${PORT_TRANSCRIBER:-4002}
 
 DB_USER=${empresa:-amanda}
 DB_PASS=${senha_deploy:-Acertitech13@}
@@ -1061,26 +1125,15 @@ PYEOF
     git checkout -f docker-compose.yml 2>/dev/null || true
   fi
 
-  docker compose -p amanda down 2>/dev/null || true
-  limpar_conteineres_conflitantes
+  limpar_conteineres_conflitantes "${compose_dir}"
   resolver_portas_automaticas
-
-  # Sincronizar portas no .env caso tenham sido ajustadas
-  if [ -f "${compose_dir}/.env" ]; then
-    sed -i "s/^PORT_DB=.*/PORT_DB=${PORT_DB:-5432}/" "${compose_dir}/.env" 2>/dev/null || true
-    sed -i "s/^PORT_PGBOUNCER=.*/PORT_PGBOUNCER=${PORT_PGBOUNCER:-6432}/" "${compose_dir}/.env" 2>/dev/null || true
-    sed -i "s/^PORT_REDIS=.*/PORT_REDIS=${PORT_REDIS:-6379}/" "${compose_dir}/.env" 2>/dev/null || true
-  fi
+  sincronizar_todas_portas_env "${compose_dir}/.env"
 
   if ! docker compose -p amanda up -d --build; then
-    printf "${YELLOW} >> Alerta ao subir contêineres. Reavaliando portas para auto-recuperação...${WHITE}\n"
+    printf "${YELLOW} >> Alerta ao subir contêineres. Limpando contêineres e reavaliando portas...${WHITE}\n"
+    limpar_conteineres_conflitantes "${compose_dir}"
     resolver_portas_automaticas
-    if [ -f "${compose_dir}/.env" ]; then
-      sed -i "s/^PORT_DB=.*/PORT_DB=${PORT_DB:-5432}/" "${compose_dir}/.env" 2>/dev/null || true
-      sed -i "s/^PORT_PGBOUNCER=.*/PORT_PGBOUNCER=${PORT_PGBOUNCER:-6432}/" "${compose_dir}/.env" 2>/dev/null || true
-      sed -i "s/^PORT_REDIS=.*/PORT_REDIS=${PORT_REDIS:-6379}/" "${compose_dir}/.env" 2>/dev/null || true
-    fi
-    docker compose -p amanda down 2>/dev/null || true
+    sincronizar_todas_portas_env "${compose_dir}/.env"
     sleep 2
     if ! docker compose -p amanda up -d; then
       printf "${RED}══════════════════════════════════════════════════════════════════${WHITE}\n"
@@ -4761,6 +4814,10 @@ dados_instalacao_base() {
   printf "   ${WHITE}Porta PostgreSQL: ------>> ${YELLOW}${PORT_DB:-5432}\n"
   printf "   ${WHITE}Porta Redis: ----------->> ${YELLOW}${PORT_REDIS:-6379}\n"
   printf "   ${WHITE}Porta PgBouncer: ------->> ${YELLOW}${PORT_PGBOUNCER:-6432}\n"
+  printf "   ${WHITE}Porta Transcrição: ----->> ${YELLOW}${PORT_TRANSCRIBER:-4002}\n"
+  printf "   ${WHITE}Porta Wuzapi: ---------->> ${YELLOW}${PORT_WUZAPI:-8090}\n"
+  printf "   ${WHITE}Porta GoFlow Dispatch: ->> ${YELLOW}${PORT_DISPATCHER:-8095}\n"
+  printf "   ${WHITE}Porta API Oficial: ----->> ${YELLOW}${PORT_APIOFICIAL:-6000}\n"
   if [ -n "${versao_instalacao}" ]; then
     printf "   ${WHITE}Versão Instalada: ------->> ${YELLOW}${versao_instalacao}${WHITE}\n"
     printf "   ${WHITE}Commit Instalado: ------->> ${YELLOW}${commit_instalacao}${WHITE}\n"
@@ -6943,7 +7000,7 @@ cat > /etc/nginx/sites-available/${empresa}-oficial << 'END'
 server {
   server_name ${oficial_hostname};
   location / {
-    proxy_pass http://127.0.0.1:6000;
+    proxy_pass http://127.0.0.1:${PORT_APIOFICIAL:-6000};
     proxy_http_version 1.1;
     proxy_set_header Upgrade \$http_upgrade;
     proxy_set_header Connection 'upgrade';

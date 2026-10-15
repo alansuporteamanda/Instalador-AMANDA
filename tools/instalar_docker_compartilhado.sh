@@ -133,8 +133,12 @@ resolver_portas_automaticas() {
   PORT_DB=$(proxima_porta_livre 5432)
   PORT_REDIS=$(proxima_porta_livre 6379)
   PORT_PGBOUNCER=$(proxima_porta_livre 6432)
+  PORT_TRANSCRIBER=$(proxima_porta_livre 4002)
+  PORT_WUZAPI=$(proxima_porta_livre 8090)
+  PORT_DISPATCHER=$(proxima_porta_livre 8095)
+  PORT_APIOFICIAL=$(proxima_porta_livre 6000)
 
-  export PORT_DB PORT_REDIS PORT_PGBOUNCER
+  export PORT_DB PORT_REDIS PORT_PGBOUNCER PORT_TRANSCRIBER PORT_WUZAPI PORT_DISPATCHER PORT_APIOFICIAL
 
   if [ "$PORT_DB" != "5432" ]; then
     printf " >> Porta host 5432 em uso. Postgres Docker alocado automaticamente na porta %s (5432 + %s).\n" "$PORT_DB" "$((PORT_DB - 5432))"
@@ -145,15 +149,40 @@ resolver_portas_automaticas() {
   if [ "$PORT_PGBOUNCER" != "6432" ]; then
     printf " >> Porta host 6432 em uso. PgBouncer Docker alocado automaticamente na porta %s (6432 + %s).\n" "$PORT_PGBOUNCER" "$((PORT_PGBOUNCER - 6432))"
   fi
+  if [ "$PORT_TRANSCRIBER" != "4002" ]; then
+    printf " >> Porta host 4002 em uso. Transcrição Docker alocada automaticamente na porta %s (4002 + %s).\n" "$PORT_TRANSCRIBER" "$((PORT_TRANSCRIBER - 4002))"
+  fi
+  if [ "$PORT_WUZAPI" != "8090" ]; then
+    printf " >> Porta host 8090 em uso. Wuzapi Docker alocado automaticamente na porta %s (8090 + %s).\n" "$PORT_WUZAPI" "$((PORT_WUZAPI - 8090))"
+  fi
+  if [ "$PORT_DISPATCHER" != "8095" ]; then
+    printf " >> Porta host 8095 em uso. Dispatcher Docker alocado automaticamente na porta %s (8095 + %s).\n" "$PORT_DISPATCHER" "$((PORT_DISPATCHER - 8095))"
+  fi
+  if [ "$PORT_APIOFICIAL" != "6000" ]; then
+    printf " >> Porta host 6000 em uso. API Oficial Docker alocada automaticamente na porta %s (6000 + %s).\n" "$PORT_APIOFICIAL" "$((PORT_APIOFICIAL - 6000))"
+  fi
 }
 
 limpar_conteineres_conflitantes() {
+  local compose_dir_alvo="${1:-${compose_dir:-}}"
+  if [ -n "$compose_dir_alvo" ] && [ -f "${compose_dir_alvo}/docker-compose.yml" ]; then
+    (cd "$compose_dir_alvo" && docker compose -p amanda down 2>/dev/null || true)
+  fi
+  docker compose -p amanda down 2>/dev/null || true
+
   local c
   for c in amanda_postgres amanda_redis amanda_pgbouncer amanda_backend amanda_frontend amanda_apioficial amanda_wuzapi amanda_campaign_dispatcher amanda_transcricao; do
     if docker ps -a --format '{{.Names}}' | grep -qw "$c"; then
       docker rm -f "$c" >/dev/null 2>&1 || true
     fi
   done
+
+  local extras
+  extras=$(docker ps -a --filter "name=amanda_" --filter "name=multiflow_" -q 2>/dev/null)
+  if [ -n "$extras" ]; then
+    docker rm -f $extras >/dev/null 2>&1 || true
+  fi
+  sleep 1
 }
 
 
