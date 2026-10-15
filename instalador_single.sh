@@ -778,7 +778,10 @@ EOF
   echo
   cd "${compose_dir}" || trata_erro "cd para compose_dir"
   docker compose down 2>/dev/null || true
-  docker compose up -d --build
+  if ! docker compose up -d --build; then
+    printf "${RED} >> Falha ao construir ou iniciar a stack AMANDA.${WHITE}\n"
+    return 1
+  fi
 
   # Aguardar banco de dados ficar pronto
   printf "${WHITE} >> Aguardando banco de dados PostgreSQL inicializar...\n"
@@ -836,6 +839,10 @@ EOF
     sleep 2
   fi
 
+  if ! mf_verificar_servicos_criticos_docker; then
+    return 1
+  fi
+
   salvar_etapa 21
 
   # Resumo final
@@ -854,6 +861,35 @@ EOF
   read -p ""
 }
 
+# Evita declarar instalação/atualização concluída com backend ou API Oficial reiniciando.
+mf_verificar_servicos_criticos_docker() {
+  local container=""
+  local state=""
+  local falha=0
+
+  sleep 10
+  for container in amanda_backend amanda_apioficial; do
+    if ! docker inspect "${container}" >/dev/null 2>&1; then
+      printf "${YELLOW} >> Container crítico ${container} não encontrado; verifique o nome no Compose.${WHITE}\n"
+      falha=1
+      continue
+    fi
+
+    state=$(docker inspect --format '{{.State.Status}}' "${container}" 2>/dev/null)
+    if [ "${state}" != "running" ]; then
+      printf "${RED} >> ${container} está com estado '${state:-desconhecido}'. Últimos logs:${WHITE}\n"
+      docker logs --tail 80 "${container}" 2>&1
+      falha=1
+    fi
+  done
+
+  if [ "${falha}" -ne 0 ]; then
+    printf "${RED} >> A plataforma não foi marcada como concluída. Corrija os erros acima e tente novamente.${WHITE}\n"
+    return 1
+  fi
+  return 0
+}
+
 # ================================================================
 # ATUALIZAÇÃO DOCKER COMPOSE AMANDA
 # ================================================================
@@ -861,16 +897,62 @@ atualizar_amanda_docker() {
   local empresa="amanda"
   local app_dir="/home/deploy/${empresa}"
   local compose_dir="${app_dir}"
+  local repo_dir="${app_dir}"
+  local branch_atual=""
   [ -d "${app_dir}/amanda" ] && compose_dir="${app_dir}/amanda"
+  if [ -d "${compose_dir}/.git" ]; then
+    repo_dir="${compose_dir}"
+  fi
+  if [ -d "${repo_dir}/.git" ]; then
+    branch_atual=$(sudo -u deploy -- git -C "${repo_dir}" branch --show-current 2>/dev/null || true)
+  fi
 
   banner
   printf "   ${PURPLE}╔══════════════════════════════════════════════════════════════╗${WHITE}\n"
   printf "   ${PURPLE}║${WHITE}             ATUALIZAR AMANDA (DOCKER COMPOSE)                ${PURPLE}║${WHITE}\n"
   printf "   ${PURPLE}╚══════════════════════════════════════════════════════════════╝${WHITE}\n\n"
-  printf "   ${WHITE}Deseja iniciar a atualização de todos os contêineres da AMANDA? (S/N): ${PURPLE}"
+  if [ "${branch_atual}" = "v1.0131012a" ]; then
+    printf "   ${WHITE}Deseja atualizar os quatro serviços da homologação GHCR? (S/N): ${PURPLE}"
+  else
+    printf "   ${WHITE}Deseja iniciar a atualização de todos os contêineres da AMANDA? (S/N): ${PURPLE}"
+  fi
   read -r confirm_upd
   confirm_upd=$(echo "${confirm_upd}" | tr '[:lower:]' '[:upper:]')
   [ "$confirm_upd" != "S" ] && return 0
+
+  if [ "${branch_atual}" = "v1.0131012a" ]; then
+    compose_dir="${repo_dir}/multiflow"
+    if [ ! -f "${compose_dir}/docker-compose.yml" ]; then
+      printf "${RED} >> Compose de homologação não encontrado em ${compose_dir}.${WHITE}\n"
+      return 1
+    fi
+
+    banner
+    printf "${PURPLE} >> Atualizando a branch de homologação v1.0131012a...${WHITE}\n"
+    if ! sudo -u deploy -- git -C "${repo_dir}" fetch origin "refs/heads/v1.0131012a:refs/remotes/origin/v1.0131012a" ||
+      ! sudo -u deploy -- git -C "${repo_dir}" pull --ff-only origin v1.0131012a; then
+      printf "${RED} >> Falha ao sincronizar a branch de homologação. Nenhum container foi atualizado.${WHITE}\n"
+      return 1
+    fi
+
+    if ! (cd "${compose_dir}" && DOCKER_CONFIG=/root/.docker docker compose pull backend frontend api_transcricao goflow_dispatcher); then
+      printf "${RED} >> Falha ao baixar as imagens do GHCR. Os containers em execução não foram alterados.${WHITE}\n"
+      return 1
+    fi
+    if ! (cd "${compose_dir}" && DOCKER_CONFIG=/root/.docker docker compose up -d --no-build backend frontend api_transcricao goflow_dispatcher); then
+      printf "${RED} >> Falha ao aplicar as imagens de homologação.${WHITE}\n"
+      return 1
+    fi
+
+    docker exec multiflow_backend npx sequelize db:migrate 2>/dev/null || true
+    banner
+    printf "   ${GREEN}>> ATUALIZAÇÃO DA HOMOLOGAÇÃO CONCLUÍDA!${WHITE}\n\n"
+    docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" | grep -E "multiflow|NAMES" || docker ps
+    echo
+    printf "${WHITE}>> Pressione Enter para voltar ao menu principal...${WHITE}\n"
+    read -r
+    return 0
+  fi
 
   banner
   printf "${PURPLE} >> Sincronizando com o repositório oficial (branch main)...${WHITE}\n"
@@ -896,13 +978,20 @@ atualizar_amanda_docker() {
   echo
   cd "${compose_dir}" || cd "${app_dir}" || return 1
   docker compose pull 2>/dev/null || true
-  docker compose up -d --build
+  if ! docker compose up -d --build; then
+    printf "${RED} >> Falha ao construir ou iniciar a stack AMANDA.${WHITE}\n"
+    return 1
+  fi
 
   banner
   printf "${PURPLE} >> Executando migrações do banco de dados (Backend e API Oficial)...${WHITE}\n"
   echo
   docker exec amanda_backend npx sequelize db:migrate 2>/dev/null || true
   docker exec amanda_apioficial npx prisma migrate deploy 2>/dev/null || docker exec amanda_apioficial npx prisma db push 2>/dev/null || true
+
+  if ! mf_verificar_servicos_criticos_docker; then
+    return 1
+  fi
 
   banner
   printf "   ${GREEN}>> ATUALIZAÇÃO AMANDA CONCLUÍDA COM SUCESSO!${WHITE}\n\n"
@@ -911,6 +1000,232 @@ atualizar_amanda_docker() {
   echo
   printf "${WHITE}>> Pressione Enter para voltar ao menu principal...${WHITE}\n"
   read -r
+}
+
+# Atualiza uma variável sem substituir o restante do arquivo .env.
+mf_watchtower_set_env() {
+  local env_file="$1"
+  local key="$2"
+  local value="$3"
+  local temp_file
+
+  temp_file=$(mktemp "${env_file}.tmp.XXXXXX") || return 1
+  if [ -f "${env_file}" ]; then
+    awk -v key="${key}" -v value="${value}" '
+      index($0, key "=") == 1 {
+        if (!replaced) print key "=" value
+        replaced = 1
+        next
+      }
+      { print }
+      END {
+        if (!replaced) print key "=" value
+      }
+    ' "${env_file}" > "${temp_file}" || {
+      rm -f "${temp_file}"
+      return 1
+    }
+  else
+    printf '%s=%s\n' "${key}" "${value}" > "${temp_file}" || {
+      rm -f "${temp_file}"
+      return 1
+    }
+  fi
+
+  chmod 600 "${temp_file}" &&
+    chown deploy:deploy "${temp_file}" &&
+    mv -f "${temp_file}" "${env_file}"
+}
+
+# Prepara uma instância de homologação e oferece ativar o Watchtower.
+configurar_watchtower_homologacao() {
+  local branch="v1.0131012a"
+  local app_dir="/home/deploy/${empresa:-amanda}"
+  local repo_dir="${app_dir}"
+  local compose_dir=""
+  local origin_url=""
+  local origin_normalizado=""
+  local estado_git=""
+  local docker_config_dir="/root/.docker"
+  local docker_config_file="/root/.docker/config.json"
+  local ghcr_user=""
+  local ghcr_token=""
+  local confirmar=""
+  local ativar=""
+  local env_source=""
+  local candidate=""
+
+  banner
+  printf "   ${PURPLE}╔══════════════════════════════════════════════════════════════╗${WHITE}\n"
+  printf "   ${PURPLE}║${WHITE}     HOMOLOGAÇÃO GHCR E ATUALIZAÇÃO AUTOMÁTICA              ${PURPLE}║${WHITE}\n"
+  printf "   ${PURPLE}╚══════════════════════════════════════════════════════════════╝${WHITE}\n\n"
+  printf "${YELLOW} >> Esta opção muda o código da plataforma para a branch ${branch}.${WHITE}\n"
+  printf "${YELLOW} >> Ela atualiza somente backend, frontend, transcrição e GoFlow.${WHITE}\n"
+  printf "${YELLOW} >> PostgreSQL, PgBouncer, Redis e WuzAPI não serão atualizados.${WHITE}\n\n"
+  printf "${WHITE}   Deseja continuar? (S/N): ${PURPLE}"
+  read -r confirmar
+  confirmar=$(printf '%s' "${confirmar}" | tr '[:lower:]' '[:upper:]')
+  [ "${confirmar}" != "S" ] && return 0
+
+  if [ ! -d "${app_dir}/.git" ] && [ -d "${app_dir}/amanda/.git" ]; then
+    repo_dir="${app_dir}/amanda"
+  fi
+  if [ ! -d "${repo_dir}/.git" ]; then
+    printf "${RED} >> Repositório da plataforma não encontrado em ${app_dir}.${WHITE}\n"
+    printf "${YELLOW} >> Instale primeiro a plataforma pelo menu principal.${WHITE}\n"
+    return 1
+  fi
+  if ! id deploy >/dev/null 2>&1; then
+    printf "${RED} >> O usuário deploy não existe; não é possível atualizar o repositório com segurança.${WHITE}\n"
+    return 1
+  fi
+
+  origin_url=$(sudo -u deploy -- git -C "${repo_dir}" remote get-url origin 2>/dev/null) || {
+    printf "${RED} >> Não foi possível validar o repositório remoto da plataforma.${WHITE}\n"
+    return 1
+  }
+  origin_normalizado=$(printf '%s' "${origin_url}" | sed -E 's#^(https?://)[^/@]+@#\1#' | tr '[:upper:]' '[:lower:]')
+  case "${origin_normalizado}" in
+    https://github.com/alansuporteamanda/amanda|https://github.com/alansuporteamanda/amanda.git|git@github.com:alansuporteamanda/amanda|git@github.com:alansuporteamanda/amanda.git)
+      ;;
+    *)
+      printf "${RED} >> Esta opção só pode ser usada com o repositório oficial AMANDA.${WHITE}\n"
+      return 1
+      ;;
+  esac
+
+  estado_git=$(sudo -u deploy -- git -C "${repo_dir}" status --porcelain 2>/dev/null) || {
+    printf "${RED} >> Não foi possível verificar o estado local do repositório.${WHITE}\n"
+    return 1
+  }
+  if [ -n "${estado_git}" ]; then
+    printf "${RED} >> Há alterações locais no repositório. Salve ou remova-as antes de trocar de branch.${WHITE}\n"
+    return 1
+  fi
+
+  if ! command -v docker >/dev/null 2>&1 || ! docker info >/dev/null 2>&1; then
+    printf "${RED} >> Docker não está disponível ou não está em execução.${WHITE}\n"
+    return 1
+  fi
+
+  printf "${WHITE}   Usuário do GitHub com acesso de leitura ao GHCR: ${PURPLE}"
+  read -r ghcr_user
+  if [ -z "${ghcr_user}" ]; then
+    printf "${RED} >> O usuário do GitHub não pode ficar vazio.${WHITE}\n"
+    return 1
+  fi
+  printf "${WHITE}   Token GHCR (read:packages; entrada oculta): ${PURPLE}"
+  read -r -s ghcr_token
+  printf "\n"
+  if [ -z "${ghcr_token}" ]; then
+    printf "${RED} >> O token não pode ficar vazio.${WHITE}\n"
+    return 1
+  fi
+
+  mkdir -p "${docker_config_dir}" || return 1
+  chmod 700 "${docker_config_dir}" || return 1
+  if ! printf '%s' "${ghcr_token}" | DOCKER_CONFIG="${docker_config_dir}" docker login ghcr.io --username "${ghcr_user}" --password-stdin; then
+    unset ghcr_token
+    printf "${RED} >> Login no GHCR falhou. Verifique o usuário, o token e a permissão read:packages.${WHITE}\n"
+    return 1
+  fi
+  unset ghcr_token
+  chmod 600 "${docker_config_file}" || {
+    printf "${RED} >> Não foi possível restringir as permissões de ${docker_config_file}.${WHITE}\n"
+    return 1
+  }
+
+  printf "${WHITE} >> Baixando a versão de homologação do repositório...${WHITE}\n"
+  if ! sudo -u deploy -- git -C "${repo_dir}" fetch origin "refs/heads/${branch}:refs/remotes/origin/${branch}" ||
+    ! sudo -u deploy -- git -C "${repo_dir}" checkout -B "${branch}" "origin/${branch}"; then
+    printf "${RED} >> Não foi possível preparar a branch ${branch}.${WHITE}\n"
+    return 1
+  fi
+
+  compose_dir="${repo_dir}/multiflow"
+  if [ ! -f "${compose_dir}/docker-compose.yml" ] || [ ! -f "${compose_dir}/.env" ]; then
+    if [ ! -f "${compose_dir}/.env" ]; then
+      for candidate in "${repo_dir}/.env" "${app_dir}/.env"; do
+        if [ -f "${candidate}" ]; then
+          env_source="${candidate}"
+          break
+        fi
+      done
+      if [ -n "${env_source}" ]; then
+        cp "${env_source}" "${compose_dir}/.env" &&
+          chown deploy:deploy "${compose_dir}/.env" &&
+          chmod 600 "${compose_dir}/.env"
+      fi
+    fi
+  fi
+  if [ ! -f "${compose_dir}/docker-compose.yml" ] || [ ! -f "${compose_dir}/.env" ]; then
+    printf "${RED} >> Compose ou .env não encontrado em ${compose_dir}.${WHITE}\n"
+    printf "${YELLOW} >> Confira a instalação antes de continuar; nenhum container foi iniciado por esta opção.${WHITE}\n"
+    return 1
+  fi
+
+  local image
+  for image in amanda-backend amanda-frontend amanda-api-transcricao amanda-goflow-dispatcher; do
+    if ! grep -Fq "image: ghcr.io/alansuporteamanda/${image}:" "${compose_dir}/docker-compose.yml"; then
+      printf "${RED} >> O Compose não contém todas as imagens GHCR esperadas.${WHITE}\n"
+      return 1
+    fi
+  done
+  local enabled_labels
+  enabled_labels=$(grep -Fc 'com.centurylinklabs.watchtower.enable: "true"' "${compose_dir}/docker-compose.yml")
+  if [ "${enabled_labels}" -ne 4 ] ||
+    ! grep -q '^  watchtower:' "${compose_dir}/docker-compose.yml" ||
+    ! grep -q 'auto-update' "${compose_dir}/docker-compose.yml"; then
+    printf "${RED} >> O Compose não parece oferecer suporte ao perfil do Watchtower.${WHITE}\n"
+    return 1
+  fi
+
+  if ! mf_watchtower_set_env "${compose_dir}/.env" "APP_VERSION" "${branch}" ||
+    ! mf_watchtower_set_env "${compose_dir}/.env" "DOCKER_CONFIG_FILE" "${docker_config_file}"; then
+    printf "${RED} >> Falha ao salvar as configurações de homologação no arquivo .env.${WHITE}\n"
+    return 1
+  fi
+  if ! grep -q '^WATCHTOWER_POLL_INTERVAL=' "${compose_dir}/.env" &&
+    ! mf_watchtower_set_env "${compose_dir}/.env" "WATCHTOWER_POLL_INTERVAL" "1800"; then
+    printf "${RED} >> Falha ao configurar o intervalo de verificação do Watchtower.${WHITE}\n"
+    return 1
+  fi
+
+  if ! (cd "${compose_dir}" && DOCKER_CONFIG="${docker_config_dir}" docker compose --profile auto-update config --quiet); then
+    printf "${RED} >> A validação do Docker Compose falhou; os containers não foram alterados.${WHITE}\n"
+    return 1
+  fi
+  if ! (cd "${compose_dir}" && DOCKER_CONFIG="${docker_config_dir}" docker compose pull backend frontend api_transcricao goflow_dispatcher); then
+    printf "${RED} >> Não foi possível baixar as imagens publicadas no GHCR.${WHITE}\n"
+    printf "${YELLOW} >> Corrija o acesso e execute novamente esta opção; Watchtower continua desligado.${WHITE}\n"
+    return 1
+  fi
+  if ! (cd "${compose_dir}" && DOCKER_CONFIG="${docker_config_dir}" docker compose up -d --no-build backend frontend api_transcricao goflow_dispatcher); then
+    printf "${RED} >> Falha ao iniciar os serviços de homologação.${WHITE}\n"
+    return 1
+  fi
+
+  banner
+  printf "${GREEN} >> Imagens de homologação aplicadas com sucesso.${WHITE}\n\n"
+  (cd "${compose_dir}" && docker compose ps backend frontend api_transcricao goflow_dispatcher)
+  echo
+  printf "${WHITE}   Deseja ativar agora o Watchtower? (S/N): ${PURPLE}"
+  read -r ativar
+  ativar=$(printf '%s' "${ativar}" | tr '[:lower:]' '[:upper:]')
+  if [ "${ativar}" = "S" ]; then
+    if ! (cd "${compose_dir}" && DOCKER_CONFIG="${docker_config_dir}" docker compose --profile auto-update up -d watchtower); then
+      printf "${RED} >> Não foi possível iniciar o Watchtower. Os serviços continuam na versão aplicada.${WHITE}\n"
+      return 1
+    fi
+    printf "${GREEN} >> Watchtower ativado. Ele verificará novas imagens a cada 30 minutos.${WHITE}\n"
+  else
+    printf "${YELLOW} >> Watchtower permaneceu desligado. Você pode ativá-lo depois pelo menu.${WHITE}\n"
+  fi
+  printf "${YELLOW} >> Para enviar alertas, configure WATCHTOWER_NOTIFICATION_URL no arquivo .env; atualmente nenhum provedor foi escolhido.${WHITE}\n"
+  echo
+  printf "${WHITE}>> Pressione Enter para voltar ao menu principal...${WHITE}\n"
+  read -r
+  return 0
 }
 
 # ================================================================
@@ -3644,6 +3959,7 @@ menu() {
     printf "   [${BLUE}6${WHITE}] Fazer Backup do Banco PostgreSQL\n"
     printf "   [${BLUE}7${WHITE}] Restaurar Backup do Banco PostgreSQL\n"
     printf "   [${BLUE}8${WHITE}] Menu de Ferramentas Adicionais\n"
+    printf "   [${BLUE}9${WHITE}] Homologação GHCR / Configurar Watchtower\n"
     printf "   [${BLUE}0${WHITE}] Sair\n"
     echo
     read -p "> " option
@@ -3671,6 +3987,9 @@ menu() {
       ;;
     8)
       menu_ferramentas
+      ;;
+    9)
+      configurar_watchtower_homologacao
       ;;
     0)
       sair

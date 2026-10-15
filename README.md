@@ -22,6 +22,24 @@ cd /root/instalador && git pull && sudo chmod -R 775 *.sh tools/*.sh && sudo ./i
 
 ---
 
+### 🧪 Homologação com GHCR e Watchtower
+
+Depois de instalar a plataforma, abra o instalador e selecione a opção **9 - Homologação GHCR / Configurar Watchtower**. Essa opção:
+
+- Confirma antes de trocar o código da plataforma para a branch `v1.0131012a`; exige que o repositório esteja sem alterações locais.
+- Solicita o usuário GitHub e um token com permissão `read:packages`. O token é digitado sem aparecer na tela e não é gravado no `.env` nem no repositório.
+- Salva as credenciais do Docker em `/root/.docker/config.json` com permissão restrita e configura `APP_VERSION` e `DOCKER_CONFIG_FILE` no `.env` do Compose.
+- Valida a configuração, baixa e aplica somente as imagens de backend, frontend, transcrição e GoFlow. PostgreSQL, PgBouncer, Redis e WuzAPI não são atualizados.
+- Pergunta separadamente se deseja iniciar o Watchtower. Se aceitar, ele consulta novas imagens no intervalo configurado (30 minutos por padrão); se não, permanece desligado.
+
+Use essa opção somente na VPS de homologação: ela troca a branch ativa da plataforma e aplica a versão publicada no GHCR. O token deve pertencer a uma conta com acesso de leitura aos pacotes da organização. Alertas ainda precisam de um provedor configurado em `WATCHTOWER_NOTIFICATION_URL`.
+
+Na opção **2 - Atualizar**, o instalador mantém a branch de homologação quando ela está ativa e atualiza apenas os quatro serviços publicados no GHCR, sem recompilá-los localmente.
+
+Para recuperar uma instalação padrão existente após a publicação de correções na branch `main`, atualize e abra novamente o instalador e escolha **2 - Atualizar**. O instalador reconstruirá os serviços a partir do código atualizado e verificará se `amanda_backend` e `amanda_apioficial` permanecem em execução; em caso de falha, exibirá os logs em vez de informar sucesso. Não remova volumes nem altere o histórico de migrações manualmente.
+
+---
+
 ### 🌟 Destaques da Suite Oficial v1.0.0:
 - **100% Docker-Only:** Orquestração completa de 9 contêineres otimizados (PostgreSQL 17, PgBouncer, Redis 7.4, AMANDA Backend Node 20 + Rust Nativo, AMANDA Frontend React, WhatsApp Meta Cloud API Oficial, WuzAPI WhatsMeow, Go Campaign Dispatcher e API de Transcrição).
 - **Modo Sem Domínio (Apenas IP / Localhost):** Suporte nativo para testes locais, WSL ou VPS sem domínio público, com acesso direto pelas portas HTTP (3000, 8080 e 6000) e bypass automático de checagens de DNS e SSL.
