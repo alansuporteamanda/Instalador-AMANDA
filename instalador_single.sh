@@ -4253,6 +4253,20 @@ selecionar_plataforma_desinstalacao() {
       done
       [ $ja_existe -eq 0 ] && plataformas+=("$nome")
     done
+
+    # 3. Buscar nomes a partir de volumes residuais de plataformas
+    local v_nomes
+    v_nomes=$(docker volume ls -q 2>/dev/null | grep -E '_(postgres_data|redis_data|backend_database|backend_public|wuzapi_data)' | sed -E 's/_.*//' | sort -u)
+    for nome in $v_nomes; do
+      case "$nome" in
+        .*|backup*|lost+found|deploy|personalizacoes|redis*|portainer*) continue ;;
+      esac
+      local ja_existe_v=0
+      for p in "${plataformas[@]}"; do
+        [ "$p" = "$nome" ] && ja_existe_v=1 && break
+      done
+      [ $ja_existe_v -eq 0 ] && plataformas+=("$nome")
+    done
   fi
 
   banner
@@ -4385,6 +4399,23 @@ desinstalar_amanda_preservando_dados() {
     done
     docker image prune -f 2>/dev/null || true
   fi
+
+  # Remover imagens base auxiliares utilizadas pela AMANDA caso não estejam em uso por nenhum outro contêiner restante
+  local imgs_auxiliares=("asternic/wuzapi" "postgres:17" "redis:7.4-alpine" "edoburu/pgbouncer")
+  for img_pat in "${imgs_auxiliares[@]}"; do
+    local img_ids
+    img_ids=$(docker images --format '{{.ID}} {{.Repository}}:{{.Tag}}' 2>/dev/null | grep "$img_pat" | awk '{print $1}' | sort -u)
+    for i_id in $img_ids; do
+      local em_uso
+      em_uso=$(docker ps -a --filter "ancestor=$i_id" -q 2>/dev/null)
+      if [ -z "$em_uso" ]; then
+        local repo_tag
+        repo_tag=$(docker images --format '{{.Repository}}:{{.Tag}}' "$i_id" 2>/dev/null | head -1)
+        printf "   ${GRAY}- Removendo imagem base auxiliar da AMANDA: %s (%s)${WHITE}\n" "$i_id" "${repo_tag:-$img_pat}"
+        docker rmi -f "$i_id" 2>/dev/null || true
+      fi
+    done
+  done
 
   printf "${WHITE} >> 3. Removendo rede Docker exclusiva de ${PURPLE}%s${WHITE}...${WHITE}\n" "${empresa_alvo}"
   docker network rm "${empresa_alvo}_net" 2>/dev/null || true
@@ -4552,6 +4583,24 @@ desinstalar_amanda_apagando_dados() {
   else
     printf "   ${GRAY}(Nenhuma imagem residual encontrada para ${empresa_alvo})${WHITE}\n"
   fi
+
+  # Remover imagens base auxiliares utilizadas pela AMANDA caso não estejam em uso por nenhum outro contêiner restante (ex: portainer ou outra plataforma)
+  local imgs_auxiliares=("asternic/wuzapi" "postgres:17" "redis:7.4-alpine" "edoburu/pgbouncer")
+  for img_pat in "${imgs_auxiliares[@]}"; do
+    local img_ids
+    img_ids=$(docker images --format '{{.ID}} {{.Repository}}:{{.Tag}}' 2>/dev/null | grep "$img_pat" | awk '{print $1}' | sort -u)
+    for i_id in $img_ids; do
+      local em_uso
+      em_uso=$(docker ps -a --filter "ancestor=$i_id" -q 2>/dev/null)
+      if [ -z "$em_uso" ]; then
+        local repo_tag
+        repo_tag=$(docker images --format '{{.Repository}}:{{.Tag}}' "$i_id" 2>/dev/null | head -1)
+        printf "   ${GRAY}- Apagando imagem base auxiliar da AMANDA: %s (%s)${WHITE}\n" "$i_id" "${repo_tag:-$img_pat}"
+        docker rmi -f "$i_id" 2>/dev/null || true
+      fi
+    done
+  done
+
   # Limpar imagens intermediárias/órfãs (dangling) sem tag geradas durante o build desta plataforma
   docker image prune -f 2>/dev/null || true
 
