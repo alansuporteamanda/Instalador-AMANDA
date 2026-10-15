@@ -4069,17 +4069,106 @@ menu_ferramentas() {
 }
 
 # ================================================================
-# DESINSTALADOR OFICIAL DA PLATAFORMA (PRESERVANDO OU APAGANDO DADOS)
+# DESINSTALADOR OFICIAL DA PLATAFORMA (100% DOCKER - ISOLADO)
 # ================================================================
+selecionar_plataforma_desinstalacao() {
+  local plataformas=()
+  local p_dir nome
+
+  # 1. Buscar diretórios em /home/deploy
+  if [ -d "/home/deploy" ]; then
+    for p_dir in /home/deploy/*; do
+      if [ -d "$p_dir" ]; then
+        nome=$(basename "$p_dir")
+        case "$nome" in
+          .*|backup*|lost+found) continue ;;
+        esac
+        plataformas+=("$nome")
+      fi
+    done
+  fi
+
+  # 2. Buscar projetos ativos no Docker Compose ou prefixos de contêineres Docker
+  if command -v docker >/dev/null 2>&1; then
+    local c_nomes
+    c_nomes=$(docker ps -a --format '{{.Names}}' 2>/dev/null | grep -E '_(backend|frontend|postgres|redis)' | sed -E 's/_.*//' | sort -u)
+    for nome in $c_nomes; do
+      local ja_existe=0
+      for p in "${plataformas[@]}"; do
+        [ "$p" = "$nome" ] && ja_existe=1 && break
+      done
+      [ $ja_existe -eq 0 ] && plataformas+=("$nome")
+    done
+  fi
+
+  # Se nenhuma plataforma encontrada, sugerir amanda
+  if [ ${#plataformas[@]} -eq 0 ]; then
+    plataformas+=("amanda")
+  fi
+
+  banner
+  printf "${WHITE}╔══════════════════════════════════════════════════════════════════════╗${WHITE}\n"
+  printf "${WHITE}║        ${PURPLE}SELECIONE QUAL PLATAFORMA DOCKER DESEJA DESINSTALAR${WHITE}           ║${WHITE}\n"
+  printf "${WHITE}╚══════════════════════════════════════════════════════════════════════╝${WHITE}\n"
+  echo
+  printf "   ${WHITE}Plataformas Docker detectadas no servidor:${WHITE}\n\n"
+
+  local idx=1
+  for p in "${plataformas[@]}"; do
+    printf "   [${BLUE}%d${WHITE}] ${YELLOW}%s${WHITE} (/home/deploy/%s)\n" "$idx" "$p" "$p"
+    idx=$((idx + 1))
+  done
+  printf "   [${BLUE}M${WHITE}] Informar manualmente outro nome de plataforma\n"
+  printf "   [${BLUE}0${WHITE}] Cancelar e Voltar ao Menu\n\n"
+  printf "${WHITE}   Escolha uma opção: ${PURPLE}"
+  read -r op_plat
+
+  case "$op_plat" in
+    0)
+      return 1
+      ;;
+    M|m)
+      printf "\n${WHITE} >> Digite o nome exato da plataforma que deseja desinstalar: ${PURPLE}"
+      read -r plataforma_escolhida
+      plataforma_escolhida=$(echo "$plataforma_escolhida" | tr -d '[:space:]')
+      [ -z "$plataforma_escolhida" ] && return 1
+      ;;
+    *)
+      if [[ "$op_plat" =~ ^[0-9]+$ ]] && [ "$op_plat" -ge 1 ] && [ "$op_plat" -le "${#plataformas[@]}" ]; then
+        plataforma_escolhida="${plataformas[$((op_plat - 1))]}"
+      else
+        printf "${RED} >> Opção inválida!${WHITE}\n"
+        sleep 2
+        return 1
+      fi
+      ;;
+  esac
+
+  echo
+  printf "${GREEN} >> Plataforma selecionada para desinstalação: ${YELLOW}%s${WHITE}\n" "$plataforma_escolhida"
+  sleep 1
+  return 0
+}
+
 desinstalar_amanda_preservando_dados() {
+  local plataforma_escolhida=""
+  selecionar_plataforma_desinstalacao || return 0
+
+  local empresa_alvo="${plataforma_escolhida}"
+  local app_dir="/home/deploy/${empresa_alvo}"
+  local compose_dir
+  compose_dir=$(localizar_diretorio_compose "${app_dir}")
+
   banner
   printf "${WHITE}╔══════════════════════════════════════════════════════════════════════╗${WHITE}\n"
   printf "${WHITE}║       ${GREEN}DESINSTALAÇÃO PRESERVANDO BANCOS DE DADOS E VOLUMES${WHITE}            ║${WHITE}\n"
   printf "${WHITE}╚══════════════════════════════════════════════════════════════════════╝${WHITE}\n"
   echo
-  printf "${YELLOW} >> Esta ação irá parar e remover todos os contêineres e códigos da AMANDA,${WHITE}\n"
-  printf "${YELLOW}    mas seus BANCOS DE DADOS (PostgreSQL, Redis, WuzAPI) serão MANTIDOS.${WHITE}\n\n"
-  printf "${WHITE} >> Deseja confirmar a desinstalação? (S/N): ${WHITE}"
+  printf "${YELLOW} >> Plataforma alvo: ${PURPLE}%s${WHITE}\n" "${empresa_alvo}"
+  printf "${YELLOW} >> Esta ação irá parar e remover APENAS os contêineres Docker e códigos da ${PURPLE}%s${YELLOW}.${WHITE}\n" "${empresa_alvo}"
+  printf "${GREEN} >> Seus BANCOS DE DADOS (PostgreSQL, Redis, WuzAPI) serão 100%% MANTIDOS.${WHITE}\n"
+  printf "${CYAN} >> Processos nativos ou rodando via PM2 no servidor NÃO serão tocados!${WHITE}\n\n"
+  printf "${WHITE} >> Confirmar desinstalação da plataforma ${PURPLE}%s${WHITE}? (S/N): " "${empresa_alvo}"
   read -r conf_desinstala
   conf_desinstala=$(echo "${conf_desinstala}" | tr '[:lower:]' '[:upper:]')
   if [ "$conf_desinstala" != "S" ]; then
@@ -4088,79 +4177,66 @@ desinstalar_amanda_preservando_dados() {
     return 0
   fi
 
-  carregar_variaveis
-  local app_dir="/home/deploy/${empresa:-amanda}"
-  local compose_dir
-  compose_dir=$(localizar_diretorio_compose "${app_dir}")
-
   banner
-  printf "${WHITE} >> 1. Parando e removendo contêineres Docker (Preservando Volumes)...${WHITE}\n"
+  printf "${WHITE} >> 1. Parando e removendo contêineres Docker da ${PURPLE}%s${WHITE} (Preservando Volumes)...${WHITE}\n" "${empresa_alvo}"
   echo
   if [ -d "${compose_dir}" ] && [ -f "${compose_dir}/docker-compose.yml" ]; then
-    (cd "${compose_dir}" && docker compose -p amanda down 2>/dev/null || true)
+    (cd "${compose_dir}" && docker compose -p "${empresa_alvo}" down 2>/dev/null || true)
   fi
-  docker compose -p amanda down 2>/dev/null || true
+  docker compose -p "${empresa_alvo}" down 2>/dev/null || true
 
-  local c
-  for c in amanda_postgres amanda_redis amanda_pgbouncer amanda_backend amanda_frontend amanda_apioficial amanda_wuzapi amanda_campaign_dispatcher amanda_transcricao; do
-    docker rm -f "$c" 2>/dev/null || true
-  done
-  local extras
-  extras=$(docker ps -a --filter "name=amanda_" --filter "name=multiflow_" -q 2>/dev/null)
-  [ -n "$extras" ] && docker rm -f $extras 2>/dev/null || true
+  # Remover APENAS contêineres que pertençam a esta plataforma específica
+  local c_ids
+  c_ids=$(docker ps -a --format '{{.ID}} {{.Names}}' 2>/dev/null | grep -E " ${empresa_alvo}_" | awk '{print $1}')
+  if [ -n "$c_ids" ]; then
+    docker rm -f $c_ids 2>/dev/null || true
+  fi
 
-  printf "${WHITE} >> 2. Removendo configurações do Nginx...${WHITE}\n"
-  rm -f /etc/nginx/sites-enabled/${empresa:-amanda}* 2>/dev/null || true
-  rm -f /etc/nginx/sites-available/${empresa:-amanda}* 2>/dev/null || true
-  rm -f /etc/nginx/sites-enabled/multiflow* 2>/dev/null || true
-  rm -f /etc/nginx/sites-available/multiflow* 2>/dev/null || true
+  printf "${WHITE} >> 2. Removendo configurações do Nginx exclusivas de ${PURPLE}%s${WHITE}...${WHITE}\n" "${empresa_alvo}"
+  rm -f /etc/nginx/sites-enabled/${empresa_alvo}-* 2>/dev/null || true
+  rm -f /etc/nginx/sites-available/${empresa_alvo}-* 2>/dev/null || true
   systemctl reload nginx 2>/dev/null || true
 
-  printf "${WHITE} >> 3. Limpando processos PM2...${WHITE}\n"
-  if command -v pm2 >/dev/null 2>&1; then
-    pm2 delete all 2>/dev/null || true
-    pm2 save 2>/dev/null || true
-  fi
-
-  printf "${WHITE} >> 4. Removendo cronjobs da aplicação...${WHITE}\n"
-  crontab -l 2>/dev/null | grep -v "${empresa:-amanda}" | grep -v "multiflow" | crontab - 2>/dev/null || true
-
-  printf "${WHITE} >> 5. Removendo diretório da aplicação (${app_dir})...${WHITE}\n"
+  printf "${WHITE} >> 3. Removendo diretório de código da plataforma (${app_dir})...${WHITE}\n"
   rm -rf "${app_dir}" 2>/dev/null || true
-  [ -d "/home/deploy/multiflow" ] && rm -rf "/home/deploy/multiflow" 2>/dev/null || true
-
-  printf "${WHITE} >> 6. Limpando arquivos de etapas...${WHITE}\n"
-  rm -f "${ARQUIVO_ETAPAS}" /root/etapas_instalacao.txt 2>/dev/null || true
 
   echo
   printf "${GREEN}══════════════════════════════════════════════════════════════════${WHITE}\n"
-  printf "${GREEN}✅ AMANDA DESINSTALADA COM SUCESSO!${WHITE}\n"
-  printf "${WHITE}   Os contêineres e códigos foram removidos.\n"
+  printf "${GREEN}✅ PLATAFORMA DOCKER [%s] DESINSTALADA COM SUCESSO!${WHITE}\n" "${empresa_alvo}"
+  printf "${WHITE}   Os contêineres e códigos da plataforma foram removidos.\n"
+  printf "${WHITE}   Nenhum processo do PM2 ou de outras plataformas foi afetado.\n"
   printf "${GREEN}   ✓ Volumes de dados preservados na VPS:${WHITE}\n"
-  docker volume ls --filter "name=amanda_" --filter "name=multiflow_" --format "     - {{.Name}}" 2>/dev/null || true
+  docker volume ls --filter "name=${empresa_alvo}_" --format "     - {{.Name}}" 2>/dev/null || true
   printf "${GREEN}══════════════════════════════════════════════════════════════════${WHITE}\n\n"
   printf "${WHITE}Pressione Enter para voltar ao menu...${WHITE}"
   read -r
 }
 
 desinstalar_amanda_apagando_dados() {
+  local plataforma_escolhida=""
+  selecionar_plataforma_desinstalacao || return 0
+
+  local empresa_alvo="${plataforma_escolhida}"
+  local app_dir="/home/deploy/${empresa_alvo}"
+  local compose_dir
+  compose_dir=$(localizar_diretorio_compose "${app_dir}")
+
   banner
   printf "${RED}╔══════════════════════════════════════════════════════════════════════╗${WHITE}\n"
   printf "${RED}║  ⚠️  AVISO DE SEGURANÇA: PERIGO CRÍTICO DE PERDA TOTAL DE DADOS!    ║${WHITE}\n"
   printf "${RED}╚══════════════════════════════════════════════════════════════════════╝${WHITE}\n"
   echo
+  printf "${RED} Plataforma selecionada para DELEÇÃO COMPLETA: ${YELLOW}%s${WHITE}\n\n" "${empresa_alvo}"
   printf "${RED} Esta ação é TOTALMENTE DESTRUTIVA e NÃO PODERÁ SER DESFEITA!${WHITE}\n\n"
-  printf "${YELLOW} Ao prosseguir com esta opção, serão APAGADOS PERMANENTEMENTE:${WHITE}\n"
-  printf "   ${RED}✖${WHITE} Todos os Bancos de Dados PostgreSQL (mensagens, conversas, tickets, clientes, funis)\n"
-  printf "   ${RED}✖${WHITE} Todas as Filas e Cache Redis\n"
-  printf "   ${RED}✖${WHITE} Todas as sessões salvas de WhatsApp (WuzAPI / Baileys)\n"
-  printf "   ${RED}✖${WHITE} Todos os arquivos de mídia (áudios gravados, fotos, anexos, documentos)\n"
-  printf "   ${RED}✖${WHITE} Todos os Volumes Docker persistentes da AMANDA\n"
-  printf "   ${RED}✖${WHITE} Todos os contêineres e imagens Docker da AMANDA\n"
-  printf "   ${RED}✖${WHITE} Todo o código-fonte em /home/deploy e configurações do Nginx\n\n"
-  printf "${RED} ⚠️  SE VOCÊ NÃO POSSUI UM BACKUP EXTERNO, TODOS OS DADOS SERÃO PERDIDOS!${WHITE}\n\n"
+  printf "${YELLOW} Serão APAGADOS PERMANENTEMENTE da plataforma [${empresa_alvo}]:${WHITE}\n"
+  printf "   ${RED}✖${WHITE} Todos os Bancos de Dados PostgreSQL de ${empresa_alvo} (mensagens, tickets, clientes)\n"
+  printf "   ${RED}✖${WHITE} Todas as Filas e Cache Redis de ${empresa_alvo}\n"
+  printf "   ${RED}✖${WHITE} Todas as sessões salvas de WhatsApp e arquivos de mídia da ${empresa_alvo}\n"
+  printf "   ${RED}✖${WHITE} Todos os Volumes Docker persistentes exclusivos da ${empresa_alvo}\n"
+  printf "   ${RED}✖${WHITE} Todos os contêineres e código em /home/deploy/${empresa_alvo}\n\n"
+  printf "${CYAN} ℹ️  Processos do PM2 e outras plataformas no servidor NÃO serão tocados.${WHITE}\n\n"
 
-  printf "${WHITE} >> Tem certeza absoluta que deseja DESTRUIR TODOS OS DADOS e desinstalar? (S/N): ${WHITE}"
+  printf "${WHITE} >> Tem certeza absoluta que deseja DESTRUIR OS DADOS da plataforma ${PURPLE}%s${WHITE}? (S/N): " "${empresa_alvo}"
   read -r resp_conf1
   resp_conf1=$(echo "${resp_conf1}" | tr '[:lower:]' '[:upper:]')
   if [ "$resp_conf1" != "S" ]; then
@@ -4171,7 +4247,7 @@ desinstalar_amanda_apagando_dados() {
 
   echo
   printf "${RED} >> [CONFIRMAÇÃO FINAL ANTI-ACIDENTE]:${WHITE}\n"
-  printf "${WHITE} >> Para confirmar a DELEÇÃO PERMANENTE de todos os bancos e dados, digite exatamente: ${RED}DELETAR TUDO${WHITE}\n"
+  printf "${WHITE} >> Para confirmar a DELEÇÃO PERMANENTE de [${empresa_alvo}], digite exatamente: ${RED}DELETAR TUDO${WHITE}\n"
   read -p "> " resp_conf2
   if [ "$resp_conf2" != "DELETAR TUDO" ]; then
     printf "\n${GREEN} >> Confirmação incorreta! Operação cancelada com segurança. Nenhum dado foi afetado.${WHITE}\n"
@@ -4179,69 +4255,44 @@ desinstalar_amanda_apagando_dados() {
     return 0
   fi
 
-  carregar_variaveis
-  local app_dir="/home/deploy/${empresa:-amanda}"
-  local compose_dir
-  compose_dir=$(localizar_diretorio_compose "${app_dir}")
-
   banner
-  printf "${RED} >> 1. Parando e destruindo contêineres e volumes da stack Compose...${WHITE}\n"
+  printf "${RED} >> 1. Parando e destruindo contêineres e volumes Compose da ${empresa_alvo}...${WHITE}\n"
   echo
   if [ -d "${compose_dir}" ] && [ -f "${compose_dir}/docker-compose.yml" ]; then
-    (cd "${compose_dir}" && docker compose -p amanda down -v --remove-orphans 2>/dev/null || true)
+    (cd "${compose_dir}" && docker compose -p "${empresa_alvo}" down -v --remove-orphans 2>/dev/null || true)
   fi
-  docker compose -p amanda down -v --remove-orphans 2>/dev/null || true
+  docker compose -p "${empresa_alvo}" down -v --remove-orphans 2>/dev/null || true
 
-  printf "${RED} >> 2. Forçando remoção de contêineres AMANDA remanescentes...${WHITE}\n"
-  local c
-  for c in amanda_postgres amanda_redis amanda_pgbouncer amanda_backend amanda_frontend amanda_apioficial amanda_wuzapi amanda_campaign_dispatcher amanda_transcricao; do
-    docker rm -f "$c" 2>/dev/null || true
-  done
-  local extras
-  extras=$(docker ps -a --filter "name=amanda_" --filter "name=multiflow_" -q 2>/dev/null)
-  [ -n "$extras" ] && docker rm -f $extras 2>/dev/null || true
+  printf "${RED} >> 2. Forçando remoção apenas de contêineres de ${empresa_alvo}...${WHITE}\n"
+  local c_ids
+  c_ids=$(docker ps -a --format '{{.ID}} {{.Names}}' 2>/dev/null | grep -E " ${empresa_alvo}_" | awk '{print $1}')
+  if [ -n "$c_ids" ]; then
+    docker rm -f $c_ids 2>/dev/null || true
+  fi
 
-  printf "${RED} >> 3. APAGANDO VOLUMES DE DADOS PERSISTENTES (PostgreSQL, Redis, WuzAPI)...${WHITE}\n"
-  local vol
-  for vol in amanda_postgres_data amanda_redis_data amanda_backend_database amanda_backend_public amanda_wuzapi_data \
-             multiflow_postgres_data multiflow_redis_data multiflow_backend_database multiflow_backend_public multiflow_wuzapi_data; do
-    docker volume rm -f "$vol" 2>/dev/null || true
-  done
-  docker volume rm -f $(docker volume ls -q | grep -E 'amanda|multiflow') 2>/dev/null || true
+  printf "${RED} >> 3. APAGANDO VOLUMES DOCKER EXCLUSIVOS DA ${empresa_alvo}...${WHITE}\n"
+  local vols
+  vols=$(docker volume ls -q 2>/dev/null | grep -E "^${empresa_alvo}_")
+  if [ -n "$vols" ]; then
+    docker volume rm -f $vols 2>/dev/null || true
+  fi
 
-  printf "${RED} >> 4. Removendo redes Docker...${WHITE}\n"
-  docker network rm amanda_net multiflow_net 2>/dev/null || true
+  printf "${RED} >> 4. Removendo rede Docker exclusiva da ${empresa_alvo}...${WHITE}\n"
+  docker network rm "${empresa_alvo}_net" 2>/dev/null || true
 
-  printf "${RED} >> 5. Removendo imagens Docker compiladas da AMANDA...${WHITE}\n"
-  docker rmi -f $(docker images | grep -E 'amanda|multiflow' | awk '{print $3}') 2>/dev/null || true
-
-  printf "${RED} >> 6. Removendo configurações do Nginx...${WHITE}\n"
-  rm -f /etc/nginx/sites-enabled/${empresa:-amanda}* 2>/dev/null || true
-  rm -f /etc/nginx/sites-available/${empresa:-amanda}* 2>/dev/null || true
-  rm -f /etc/nginx/sites-enabled/multiflow* 2>/dev/null || true
-  rm -f /etc/nginx/sites-available/multiflow* 2>/dev/null || true
+  printf "${RED} >> 5. Removendo configurações do Nginx de ${empresa_alvo}...${WHITE}\n"
+  rm -f /etc/nginx/sites-enabled/${empresa_alvo}-* 2>/dev/null || true
+  rm -f /etc/nginx/sites-available/${empresa_alvo}-* 2>/dev/null || true
   systemctl reload nginx 2>/dev/null || true
 
-  printf "${RED} >> 7. Limpando processos PM2 e cronjobs...${WHITE}\n"
-  if command -v pm2 >/dev/null 2>&1; then
-    pm2 delete all 2>/dev/null || true
-    pm2 save 2>/dev/null || true
-  fi
-  crontab -l 2>/dev/null | grep -v "${empresa:-amanda}" | grep -v "multiflow" | crontab - 2>/dev/null || true
-
-  printf "${RED} >> 8. Apagando código-fonte e dados em disco (${app_dir})...${WHITE}\n"
+  printf "${RED} >> 6. Apagando código-fonte e dados em disco (${app_dir})...${WHITE}\n"
   rm -rf "${app_dir}" 2>/dev/null || true
-  [ -d "/home/deploy/multiflow" ] && rm -rf "/home/deploy/multiflow" 2>/dev/null || true
-
-  printf "${RED} >> 9. Limpando arquivos de configuração e etapas do instalador...${WHITE}\n"
-  rm -f "${ARQUIVO_ETAPAS}" /root/etapas_instalacao.txt 2>/dev/null || true
-  rm -f "${ARQUIVO_VARIAVEIS}" /root/variaveis_instalacao.txt 2>/dev/null || true
-  rm -f ALTA_PERFORMANCE_MODE /root/ALTA_PERFORMANCE_MODE 2>/dev/null || true
 
   echo
   printf "${RED}══════════════════════════════════════════════════════════════════${WHITE}\n"
-  printf "${RED}💥 DESINSTALAÇÃO COMPLETA E LIMPEZA DE DADOS CONCLUÍDA!${WHITE}\n"
-  printf "${WHITE}   Todos os contêineres, códigos e bancos de dados foram removidos da VPS.\n"
+  printf "${RED}💥 DESINSTALAÇÃO DA PLATAFORMA [%s] CONCLUÍDA!${WHITE}\n" "${empresa_alvo}"
+  printf "${WHITE}   Contêineres, códigos e bancos de dados de [%s] foram removidos.\n" "${empresa_alvo}"
+  printf "${GREEN}   Nenhum processo PM2 ou de outras plataformas foi tocado.${WHITE}\n"
   printf "${RED}══════════════════════════════════════════════════════════════════${WHITE}\n\n"
   printf "${WHITE}Pressione Enter para voltar ao menu...${WHITE}"
   read -r
@@ -4255,12 +4306,12 @@ menu_desinstalar_plataforma() {
     printf "${WHITE}╚══════════════════════════════════════════════════════════════════════╝${WHITE}\n"
     echo
     printf "   ${WHITE}Escolha como deseja proceder com a desinstalação:${WHITE}\n\n"
-    printf "   [${BLUE}1${WHITE}] ${GREEN}Desinstalar ${nome_titulo} PRESERVANDO os Bancos de Dados${WHITE}\n"
-    printf "       ${GRAY}(Remove contêineres, código e proxy Nginx, mas MANTÉM todos os volumes${WHITE}\n"
-    printf "       ${GRAY} e dados de PostgreSQL, Redis, WuzAPI e mídias salvos para reinstalação)${WHITE}\n\n"
-    printf "   [${BLUE}2${WHITE}] ${RED}Desinstalar ${nome_titulo} e APAGAR TODOS OS BANCOS DE DADOS (Destrutivo)${WHITE}\n"
+    printf "   [${BLUE}1${WHITE}] ${GREEN}Desinstalar Plataforma PRESERVANDO os Bancos de Dados${WHITE}\n"
+    printf "       ${GRAY}(Remove apenas contêineres Docker e código da plataforma escolhida,${WHITE}\n"
+    printf "       ${GRAY} MANTENDO todos os volumes de dados de PostgreSQL, Redis e mídias salvos)${WHITE}\n\n"
+    printf "   [${BLUE}2${WHITE}] ${RED}Desinstalar Plataforma e APAGAR OS BANCOS DE DADOS (Destrutivo)${WHITE}\n"
     printf "       ${YELLOW}(Wipeout total: remove contêineres, código, bancos, mídias e volumes.${WHITE}\n"
-    printf "       ${RED} ATENÇÃO: Todos os dados serão PERDIDOS PERMANENTEMENTE!)${WHITE}\n\n"
+    printf "       ${RED} ATENÇÃO: Todos os dados da plataforma serão PERDIDOS PERMANENTEMENTE!)${WHITE}\n\n"
     printf "   [${BLUE}0${WHITE}] Voltar ao Menu Principal\n\n"
     printf "${WHITE}   Escolha uma opção: ${PURPLE}"
     read -r op_desinstala
