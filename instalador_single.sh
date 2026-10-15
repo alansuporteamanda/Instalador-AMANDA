@@ -7584,12 +7584,20 @@ EOF
 # Configura Nginx
 config_nginx_base() {
   banner
-  printf "${WHITE} >> Configurando nginx ${BLUE}frontend${WHITE}...\n"
+  printf "${WHITE} >> Configurando proxy reverso Nginx para ${PURPLE}${empresa}${WHITE}...\n"
   echo
   {
     frontend_hostname=$(echo "${subdominio_frontend/https:\/\//}")
-    sudo su - root <<EOF
-cat > /etc/nginx/sites-available/${empresa}-frontend << 'END'
+    frontend_hostname=$(echo "${frontend_hostname/http:\/\//}")
+    frontend_hostname=${frontend_hostname%%/*}
+    frontend_hostname=${frontend_hostname%%:*}
+
+    backend_hostname=$(echo "${subdominio_backend/https:\/\//}")
+    backend_hostname=$(echo "${backend_hostname/http:\/\//}")
+    backend_hostname=${backend_hostname%%/*}
+    backend_hostname=${backend_hostname%%:*}
+
+    cat > "/etc/nginx/sites-available/${empresa}-frontend" <<EOF
 server {
   server_name ${frontend_hostname};
   location / {
@@ -7604,22 +7612,16 @@ server {
     proxy_cache_bypass \$http_upgrade;
   }
 }
-END
-ln -sf /etc/nginx/sites-available/${empresa}-frontend /etc/nginx/sites-enabled/
 EOF
+    ln -sf "/etc/nginx/sites-available/${empresa}-frontend" "/etc/nginx/sites-enabled/${empresa}-frontend"
 
-    sleep 2
+    sleep 1
 
-    banner
-    printf "${WHITE} >> Configurando Nginx ${BLUE}backend${WHITE}...\n"
-    echo
-    backend_hostname=$(echo "${subdominio_backend/https:\/\//}")
-    sudo su - root <<EOF
-cat > /etc/nginx/sites-available/${empresa}-backend << 'END'
+    cat > "/etc/nginx/sites-available/${empresa}-backend" <<EOF
 upstream ${empresa}_backend {
-        server 127.0.0.1:${backend_port};
-        keepalive 32;
-    }
+    server 127.0.0.1:${backend_port};
+    keepalive 32;
+}
 server {
   server_name ${backend_hostname};
   location / {
@@ -7635,57 +7637,18 @@ server {
     proxy_buffering on;
   }
 }
-END
-ln -sf /etc/nginx/sites-available/${empresa}-backend /etc/nginx/sites-enabled/
 EOF
+    ln -sf "/etc/nginx/sites-available/${empresa}-backend" "/etc/nginx/sites-enabled/${empresa}-backend"
 
-    sleep 2
-
-    local email_arg
-    if [ -n "${email_deploy}" ]; then
-      email_arg="-m ${email_deploy}"
-    else
-      email_arg="--register-unsafely-without-email"
-    fi
-
-    banner
-    printf "${WHITE} >> Emitindo SSL do ${subdominio_backend}...\n"
-    echo
-    backend_domain=$(echo "${subdominio_backend/https:\/\//}")
-    backend_domain=$(echo "${backend_domain/http:\/\//}")
-    backend_domain=${backend_domain%%/*}
-    backend_domain=${backend_domain%%:*}
-    if [[ "$backend_domain" == *.* ]]; then
-      sudo certbot ${email_arg} --nginx --agree-tos --redirect -n -d "${backend_domain}" 2>/dev/null || \
-      sudo certbot ${email_arg} --nginx --agree-tos -n -d "${backend_domain}" 2>/dev/null || true
-    fi
-
-    sleep 2
-
-    banner
-    printf "${WHITE} >> Emitindo SSL do ${subdominio_frontend}...\n"
-    echo
-    frontend_domain=$(echo "${subdominio_frontend/https:\/\//}")
-    frontend_domain=$(echo "${frontend_domain/http:\/\//}")
-    frontend_domain=${frontend_domain%%/*}
-    frontend_domain=${frontend_domain%%:*}
-    if [[ "$frontend_domain" == *.* ]]; then
-      sudo certbot ${email_arg} --nginx --agree-tos --redirect -n -d "${frontend_domain}" 2>/dev/null || \
-      sudo certbot ${email_arg} --nginx --agree-tos -n -d "${frontend_domain}" 2>/dev/null || true
-    fi
-
-    sleep 2
+    sleep 1
 
     if [ -n "${subdominio_oficial}" ]; then
-      banner
-      printf "${WHITE} >> Configurando Nginx para ${PURPLE}API Oficial${WHITE}...\n"
-      echo
       oficial_hostname=$(echo "${subdominio_oficial/https:\/\//}")
       oficial_hostname=$(echo "${oficial_hostname/http:\/\//}")
       oficial_hostname=${oficial_hostname%%/*}
       oficial_hostname=${oficial_hostname%%:*}
-      sudo su - root <<EOF
-cat > /etc/nginx/sites-available/${empresa}-oficial << 'END'
+
+      cat > "/etc/nginx/sites-available/${empresa}-oficial" <<EOF
 server {
   server_name ${oficial_hostname};
   location / {
@@ -7700,19 +7663,61 @@ server {
     proxy_cache_bypass \$http_upgrade;
   }
 }
-END
-ln -sf /etc/nginx/sites-available/${empresa}-oficial /etc/nginx/sites-enabled/
 EOF
-      if [[ "$oficial_hostname" == *.* ]]; then
-        banner
-        printf "${WHITE} >> Emitindo SSL da ${subdominio_oficial}...\n"
-        echo
-        sudo certbot ${email_arg} --nginx --agree-tos --redirect -n -d "${oficial_hostname}" 2>/dev/null || \
-        sudo certbot ${email_arg} --nginx --agree-tos -n -d "${oficial_hostname}" 2>/dev/null || true
-      fi
-      sleep 2
+      ln -sf "/etc/nginx/sites-available/${empresa}-oficial" "/etc/nginx/sites-enabled/${empresa}-oficial"
+      sleep 1
     fi
-    sudo systemctl reload nginx 2>/dev/null || true
+
+    # Remover default para liberar porta 80 e evitar conflitos
+    rm -f /etc/nginx/sites-enabled/default 2>/dev/null || true
+
+    # Habilitar e iniciar/recarregar Nginx antes de invocar o Certbot
+    systemctl enable nginx 2>/dev/null || true
+    if nginx -t 2>/dev/null; then
+      systemctl restart nginx 2>/dev/null || service nginx restart 2>/dev/null || true
+    else
+      printf "${YELLOW} >> Aviso: Validação de sintaxe Nginx antes do SSL:${WHITE}\n"
+      nginx -t || true
+      systemctl restart nginx 2>/dev/null || true
+    fi
+
+    local email_arg
+    if [ -n "${email_deploy}" ]; then
+      email_arg="-m ${email_deploy}"
+    else
+      email_arg="--register-unsafely-without-email"
+    fi
+
+    if [[ "$backend_hostname" == *.* ]]; then
+      banner
+      printf "${WHITE} >> Emitindo SSL do ${subdominio_backend}...\n"
+      echo
+      certbot ${email_arg} --nginx --agree-tos --redirect -n -d "${backend_hostname}" 2>/dev/null || \
+      certbot ${email_arg} --nginx --agree-tos -n -d "${backend_hostname}" 2>/dev/null || true
+    fi
+
+    sleep 1
+
+    if [[ "$frontend_hostname" == *.* ]]; then
+      banner
+      printf "${WHITE} >> Emitindo SSL do ${subdominio_frontend}...\n"
+      echo
+      certbot ${email_arg} --nginx --agree-tos --redirect -n -d "${frontend_hostname}" 2>/dev/null || \
+      certbot ${email_arg} --nginx --agree-tos -n -d "${frontend_hostname}" 2>/dev/null || true
+    fi
+
+    sleep 1
+
+    if [ -n "${subdominio_oficial}" ] && [[ "$oficial_hostname" == *.* ]]; then
+      banner
+      printf "${WHITE} >> Emitindo SSL da ${subdominio_oficial}...\n"
+      echo
+      certbot ${email_arg} --nginx --agree-tos --redirect -n -d "${oficial_hostname}" 2>/dev/null || \
+      certbot ${email_arg} --nginx --agree-tos -n -d "${oficial_hostname}" 2>/dev/null || true
+      sleep 1
+    fi
+
+    systemctl reload nginx 2>/dev/null || service nginx reload 2>/dev/null || true
   } || trata_erro "config_nginx_base"
 }
 
