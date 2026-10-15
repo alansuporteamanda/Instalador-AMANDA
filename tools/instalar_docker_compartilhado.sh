@@ -170,23 +170,17 @@ resolver_portas_automaticas() {
 
 limpar_conteineres_conflitantes() {
   local compose_dir_alvo="${1:-${compose_dir:-}}"
+  local proj_name="${2:-${empresa:-amanda}}"
   if [ -n "$compose_dir_alvo" ] && [ -f "${compose_dir_alvo}/docker-compose.yml" ]; then
-    (cd "$compose_dir_alvo" && docker compose -p amanda down 2>/dev/null || true)
+    (cd "$compose_dir_alvo" && docker compose -p "${proj_name}" down 2>/dev/null || true)
   fi
-  docker compose -p amanda down 2>/dev/null || true
 
   local c
-  for c in amanda_postgres amanda_redis amanda_pgbouncer amanda_backend amanda_frontend amanda_apioficial amanda_wuzapi amanda_campaign_dispatcher amanda_transcricao; do
+  for c in "${proj_name}_postgres" "${proj_name}_redis" "${proj_name}_pgbouncer" "${proj_name}_backend" "${proj_name}_frontend" "${proj_name}_apioficial" "${proj_name}_wuzapi" "${proj_name}_campaign_dispatcher" "${proj_name}_transcricao"; do
     if docker ps -a --format '{{.Names}}' | grep -qw "$c"; then
       docker rm -f "$c" >/dev/null 2>&1 || true
     fi
   done
-
-  local extras
-  extras=$(docker ps -a --filter "name=amanda_" --filter "name=multiflow_" -q 2>/dev/null)
-  if [ -n "$extras" ]; then
-    docker rm -f $extras >/dev/null 2>&1 || true
-  fi
   sleep 1
 }
 

@@ -176,48 +176,56 @@ tentar_corrigir_dns() {
 
 # Salvar variáveis
 salvar_variaveis() {
-  echo "subdominio_backend=${subdominio_backend}" >$ARQUIVO_VARIAVEIS
-  echo "subdominio_frontend=${subdominio_frontend}" >>$ARQUIVO_VARIAVEIS
-  echo "email_deploy=${email_deploy}" >>$ARQUIVO_VARIAVEIS
-  echo "empresa=${empresa}" >>$ARQUIVO_VARIAVEIS
-  echo "senha_deploy=${senha_deploy}" >>$ARQUIVO_VARIAVEIS
-  # echo "subdominio_perfex=${subdominio_perfex}" >>$ARQUIVO_VARIAVEIS
-  echo "senha_master=${senha_master}" >>$ARQUIVO_VARIAVEIS
-  echo "nome_titulo=\"${nome_titulo}\"" >>$ARQUIVO_VARIAVEIS
-  echo "numero_suporte=${numero_suporte}" >>$ARQUIVO_VARIAVEIS
-  echo "facebook_app_id=${facebook_app_id}" >>$ARQUIVO_VARIAVEIS
-  echo "facebook_app_secret=${facebook_app_secret}" >>$ARQUIVO_VARIAVEIS
-  echo "github_token=${github_token}" >>$ARQUIVO_VARIAVEIS
-  echo "repo_url=${repo_url}" >>$ARQUIVO_VARIAVEIS
-  echo "proxy=${proxy}" >>$ARQUIVO_VARIAVEIS
-  echo "backend_port=${backend_port:-8080}" >>$ARQUIVO_VARIAVEIS
-  echo "frontend_port=${frontend_port:-3000}" >>$ARQUIVO_VARIAVEIS
-  echo "PORT_DB=${PORT_DB:-5432}" >>$ARQUIVO_VARIAVEIS
-  echo "PORT_REDIS=${PORT_REDIS:-6379}" >>$ARQUIVO_VARIAVEIS
-  echo "PORT_PGBOUNCER=${PORT_PGBOUNCER:-6432}" >>$ARQUIVO_VARIAVEIS
-  echo "PORT_TRANSCRIBER=${PORT_TRANSCRIBER:-4002}" >>$ARQUIVO_VARIAVEIS
-  echo "PORT_WUZAPI=${PORT_WUZAPI:-8090}" >>$ARQUIVO_VARIAVEIS
-  echo "PORT_DISPATCHER=${PORT_DISPATCHER:-8095}" >>$ARQUIVO_VARIAVEIS
-  echo "PORT_APIOFICIAL=${PORT_APIOFICIAL:-6000}" >>$ARQUIVO_VARIAVEIS
+  local arq_dest="${ARQUIVO_VARIAVEIS:-VARIAVEIS_INSTALACAO}"
+  echo "subdominio_backend=${subdominio_backend}" >"$arq_dest"
+  echo "subdominio_frontend=${subdominio_frontend}" >>"$arq_dest"
+  echo "email_deploy=${email_deploy}" >>"$arq_dest"
+  echo "empresa=${empresa}" >>"$arq_dest"
+  echo "senha_deploy=${senha_deploy}" >>"$arq_dest"
+  echo "senha_master=${senha_master}" >>"$arq_dest"
+  echo "nome_titulo=\"${nome_titulo}\"" >>"$arq_dest"
+  echo "numero_suporte=${numero_suporte}" >>"$arq_dest"
+  echo "facebook_app_id=${facebook_app_id}" >>"$arq_dest"
+  echo "facebook_app_secret=${facebook_app_secret}" >>"$arq_dest"
+  echo "github_token=${github_token}" >>"$arq_dest"
+  echo "repo_url=${repo_url}" >>"$arq_dest"
+  echo "proxy=${proxy}" >>"$arq_dest"
+  echo "backend_port=${backend_port:-8080}" >>"$arq_dest"
+  echo "frontend_port=${frontend_port:-3000}" >>"$arq_dest"
+  echo "PORT_DB=${PORT_DB:-5432}" >>"$arq_dest"
+  echo "PORT_REDIS=${PORT_REDIS:-6379}" >>"$arq_dest"
+  echo "PORT_PGBOUNCER=${PORT_PGBOUNCER:-6432}" >>"$arq_dest"
+  echo "PORT_TRANSCRIBER=${PORT_TRANSCRIBER:-4002}" >>"$arq_dest"
+  echo "PORT_WUZAPI=${PORT_WUZAPI:-8090}" >>"$arq_dest"
+  echo "PORT_DISPATCHER=${PORT_DISPATCHER:-8095}" >>"$arq_dest"
+  echo "PORT_APIOFICIAL=${PORT_APIOFICIAL:-6000}" >>"$arq_dest"
   # Salvar versão (usar underscore se for "Mais Recente" para evitar problemas com espaços)
   local versao_para_salvar="${versao_instalacao}"
   if [ "${versao_instalacao}" = "Mais Recente" ] || [ "${versao_instalacao}" = "Mais_Recente" ]; then
     versao_para_salvar="Mais_Recente"
   fi
-  echo "versao_instalacao=${versao_para_salvar}" >>$ARQUIVO_VARIAVEIS
-  echo "commit_instalacao=${commit_instalacao}" >>$ARQUIVO_VARIAVEIS
+  echo "versao_instalacao=${versao_para_salvar}" >>"$arq_dest"
+  echo "commit_instalacao=${commit_instalacao}" >>"$arq_dest"
   # Registro se a instalação foi em modo Alta Performance (Redis, Postgres e PgBouncer via Docker)
-  echo "# Instalação em modo Alta Performance (1=sim, 0=não)" >>$ARQUIVO_VARIAVEIS
-  echo "ALTA_PERFORMANCE=${ALTA_PERFORMANCE:-0}" >>$ARQUIVO_VARIAVEIS
-  echo "subdominio_oficial=${subdominio_oficial}" >>$ARQUIVO_VARIAVEIS
-  echo "INSTALACAO_SEM_DOMINIO=${INSTALACAO_SEM_DOMINIO:-0}" >>$ARQUIVO_VARIAVEIS
-  echo "perfil_otimizacao_vps=${perfil_otimizacao_vps:-0}" >>$ARQUIVO_VARIAVEIS
+  echo "# Instalação em modo Alta Performance (1=sim, 0=não)" >>"$arq_dest"
+  echo "ALTA_PERFORMANCE=${ALTA_PERFORMANCE:-0}" >>"$arq_dest"
+  echo "subdominio_oficial=${subdominio_oficial}" >>"$arq_dest"
+  echo "INSTALACAO_SEM_DOMINIO=${INSTALACAO_SEM_DOMINIO:-0}" >>"$arq_dest"
+  echo "perfil_otimizacao_vps=${perfil_otimizacao_vps:-0}" >>"$arq_dest"
+
+  # Sincronizar cópia individual da instância para compatibilidade total
+  if [ -n "${empresa:-}" ]; then
+    local instalador_dir_local
+    instalador_dir_local="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    cp -f "$arq_dest" "${instalador_dir_local}/VARIAVEIS_INSTALACAO_INSTANCIA_${empresa}" 2>/dev/null || true
+  fi
 }
 
 # Carregar variáveis
 carregar_variaveis() {
-  if [ -f $ARQUIVO_VARIAVEIS ]; then
-    source $ARQUIVO_VARIAVEIS
+  local arq_carregar="${ARQUIVO_VARIAVEIS:-VARIAVEIS_INSTALACAO}"
+  if [ -f "$arq_carregar" ]; then
+    source "$arq_carregar"
     empresa="${empresa:-amanda}"
     nome_titulo="${nome_titulo:-AMANDA}"
     INSTALACAO_SEM_DOMINIO="${INSTALACAO_SEM_DOMINIO:-0}"
@@ -229,7 +237,7 @@ carregar_variaveis() {
     PORT_DISPATCHER="${PORT_DISPATCHER:-8095}"
     PORT_APIOFICIAL="${PORT_APIOFICIAL:-6000}"
   else
-    empresa="amanda"
+    empresa="${empresa:-amanda}"
     nome_titulo="AMANDA"
     INSTALACAO_SEM_DOMINIO="0"
     PORT_DB="5432"
@@ -244,15 +252,22 @@ carregar_variaveis() {
 
 # Salvar etapa concluída
 salvar_etapa() {
-  echo "$1" >$ARQUIVO_ETAPAS
+  local arq_e="${ARQUIVO_ETAPAS:-ETAPA_INSTALACAO}"
+  echo "$1" >"$arq_e"
+  if [ -n "${empresa:-}" ] && [ "$arq_e" = "ETAPA_INSTALACAO" ]; then
+    local instalador_dir_local
+    instalador_dir_local="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    echo "$1" >"${instalador_dir_local}/ETAPA_INSTALACAO_${empresa}" 2>/dev/null || true
+  fi
 }
 
 # Carregar última etapa
 carregar_etapa() {
-  if [ -f $ARQUIVO_ETAPAS ]; then
-    etapa=$(cat $ARQUIVO_ETAPAS 2>/dev/null | tr -d '\r\n ')
+  local arq_e="${ARQUIVO_ETAPAS:-ETAPA_INSTALACAO}"
+  if [ -f "$arq_e" ]; then
+    etapa=$(cat "$arq_e" 2>/dev/null | tr -d '\r\n ')
     if ! [[ "$etapa" =~ ^[0-9]+$ ]]; then
-      printf "${YELLOW} >> Aviso: etapa inválida em ${ARQUIVO_ETAPAS} (${etapa:-vazio}). Reiniciando controle de etapas.${WHITE}\n"
+      printf "${YELLOW} >> Aviso: etapa inválida em ${arq_e} (${etapa:-vazio}). Reiniciando controle de etapas.${WHITE}\n"
       etapa="0"
       salvar_etapa "$etapa"
     fi
@@ -352,8 +367,8 @@ atualizar_nginx_e_ssl_dominio() {
     return 0
   fi
 
-  local empresa="amanda"
-  local site_conf="/etc/nginx/sites-available/${empresa}-${servico}"
+  local emp="${empresa:-amanda}"
+  local site_conf="/etc/nginx/sites-available/${emp}-${servico}"
   local porta_local=${frontend_port:-3000}
   [ "$servico" = "backend" ] && porta_local=${backend_port:-8080}
   [ "$servico" = "api_oficial" ] && porta_local=${PORT_APIOFICIAL:-6000}
@@ -379,7 +394,7 @@ server {
 }
 EOF
 
-  ln -sf "$site_conf" "/etc/nginx/sites-enabled/${empresa}-${servico}" 2>/dev/null || true
+  ln -sf "$site_conf" "/etc/nginx/sites-enabled/${emp}-${servico}" 2>/dev/null || true
 
   if nginx -t 2>/dev/null; then
     systemctl reload nginx 2>/dev/null || true
@@ -464,23 +479,29 @@ aplicar_atualizacao_url_individual() {
   printf "${PURPLE} >> Reiniciando contêineres para aplicar a nova URL...${WHITE}\n"
   echo
   cd "$compose_dir" || return 1
+  local proj_name="${empresa:-amanda}"
+  if [ -f "${compose_dir}/.env" ]; then
+    local p_env
+    p_env=$(grep -E "^(COMPOSE_PROJECT_NAME|EMPRESA)=" "${compose_dir}/.env" 2>/dev/null | head -1 | cut -d'=' -f2- | tr -d '"\r ')
+    [ -n "$p_env" ] && proj_name="$p_env"
+  fi
 
   case "$servico" in
     frontend)
-      docker compose -p amanda up -d --build frontend
-      docker compose -p amanda restart backend 2>/dev/null || true
+      docker compose -p "$proj_name" up -d --build frontend
+      docker compose -p "$proj_name" restart backend 2>/dev/null || true
       ;;
     backend)
-      docker compose -p amanda up -d backend
-      docker compose -p amanda restart frontend goflow_dispatcher 2>/dev/null || true
-      [ -d "${compose_dir}/api_oficial" ] && docker compose -p amanda restart api_oficial 2>/dev/null || true
+      docker compose -p "$proj_name" up -d backend
+      docker compose -p "$proj_name" restart frontend goflow_dispatcher 2>/dev/null || true
+      [ -d "${compose_dir}/api_oficial" ] && docker compose -p "$proj_name" restart api_oficial 2>/dev/null || true
       ;;
     api_oficial)
-      docker compose -p amanda up -d api_oficial
-      docker compose -p amanda restart backend 2>/dev/null || true
+      docker compose -p "$proj_name" up -d api_oficial
+      docker compose -p "$proj_name" restart backend 2>/dev/null || true
       ;;
     *)
-      docker compose -p amanda restart backend 2>/dev/null || true
+      docker compose -p "$proj_name" restart backend 2>/dev/null || true
       ;;
   esac
 
@@ -550,8 +571,14 @@ atualizar_todas_urls_em_lote() {
   banner
   printf "${PURPLE} >> Reiniciando contêineres com as novas URLs...${WHITE}\n"
   cd "$compose_dir" || return 1
-  docker compose up -d --build frontend
-  docker compose up -d backend api_oficial goflow_dispatcher
+  local proj_name="${empresa:-amanda}"
+  if [ -f "${compose_dir}/.env" ]; then
+    local p_env
+    p_env=$(grep -E "^(COMPOSE_PROJECT_NAME|EMPRESA)=" "${compose_dir}/.env" 2>/dev/null | head -1 | cut -d'=' -f2- | tr -d '"\r ')
+    [ -n "$p_env" ] && proj_name="$p_env"
+  fi
+  docker compose -p "$proj_name" up -d --build frontend
+  docker compose -p "$proj_name" up -d backend api_oficial goflow_dispatcher
 
   printf "\n${GREEN} >> Todas as URLs foram atualizadas e os contêineres reiniciados com sucesso!${WHITE}\n\n"
   printf "${WHITE}>> Pressione Enter para continuar...${WHITE}\n"
@@ -562,8 +589,8 @@ atualizar_todas_urls_em_lote() {
 # GERENCIAR URLs DO SISTEMA AMANDA
 # ================================================================
 gerenciar_urls_sistema() {
-  local empresa="amanda"
-  local app_dir="/home/deploy/${empresa}"
+  selecionar_instancia_atualizar "gerenciar URLs" || return 0
+  local app_dir="/home/deploy/${empresa:-amanda}"
   local compose_dir
   compose_dir=$(localizar_diretorio_compose "${app_dir}")
 
@@ -850,23 +877,17 @@ sincronizar_todas_portas_env() {
 
 limpar_conteineres_conflitantes() {
   local compose_dir_alvo="${1:-${compose_dir:-}}"
+  local proj_name="${2:-${empresa:-amanda}}"
   if [ -n "$compose_dir_alvo" ] && [ -f "${compose_dir_alvo}/docker-compose.yml" ]; then
-    (cd "$compose_dir_alvo" && docker compose -p amanda down 2>/dev/null || true)
+    (cd "$compose_dir_alvo" && docker compose -p "${proj_name}" down 2>/dev/null || true)
   fi
-  docker compose -p amanda down 2>/dev/null || true
 
   local c
-  for c in amanda_postgres amanda_redis amanda_pgbouncer amanda_backend amanda_frontend amanda_apioficial amanda_wuzapi amanda_campaign_dispatcher amanda_transcricao; do
+  for c in "${proj_name}_postgres" "${proj_name}_redis" "${proj_name}_pgbouncer" "${proj_name}_backend" "${proj_name}_frontend" "${proj_name}_apioficial" "${proj_name}_wuzapi" "${proj_name}_campaign_dispatcher" "${proj_name}_transcricao"; do
     if docker ps -a --format '{{.Names}}' | grep -qw "$c"; then
       docker rm -f "$c" >/dev/null 2>&1 || true
     fi
   done
-
-  local extras
-  extras=$(docker ps -a --filter "name=amanda_" --filter "name=multiflow_" -q 2>/dev/null)
-  if [ -n "$extras" ]; then
-    docker rm -f $extras >/dev/null 2>&1 || true
-  fi
   sleep 1
 }
 
@@ -930,8 +951,10 @@ instalar_amanda_docker_stack() {
   # Garantir Docker e Docker Compose instalados e 100% operacionais automaticamente
   garantir_docker_e_compose
 
+  local proj_name="${empresa:-amanda}"
+
   # Limpar contêineres Docker órfãos e resolver portas automaticamente (+1 se em uso)
-  limpar_conteineres_conflitantes
+  limpar_conteineres_conflitantes "/home/deploy/${proj_name}" "${proj_name}"
   resolver_portas_automaticas
 
   # Instalar Git e baixar o repositório
@@ -949,12 +972,14 @@ instalar_amanda_docker_stack() {
   compose_dir=$(localizar_diretorio_compose "${app_dir}")
 
   banner
-  printf "${WHITE} >> Configurando variáveis de ambiente da Stack AMANDA (Todas as APIs)...\n"
+  printf "${WHITE} >> Configurando variáveis de ambiente da Stack AMANDA (${proj_name})...\n"
   printf "${PURPLE} >> Diretório do Compose detectado: ${BLUE}%s${WHITE}\n" "$compose_dir"
   echo
 
   # Preparar .env da Stack Docker Compose com todas as APIs
   cat <<EOF > "${compose_dir}/.env"
+COMPOSE_PROJECT_NAME=${empresa:-amanda}
+EMPRESA=${empresa:-amanda}
 NODE_ENV=production
 BACKEND_URL=${subdominio_backend}
 FRONTEND_URL=${subdominio_frontend}
@@ -1032,22 +1057,22 @@ db_pass = sys.argv[3]
 with open(compose_file, "r", encoding="utf-8") as f:
     content = f.read()
 
-# 1. name: amanda
+# 1. Garantir name: ${COMPOSE_PROJECT_NAME:-amanda}
 if not re.search(r"^name:\s*", content, re.M):
-    content = "name: amanda\n" + content
+    content = "name: ${COMPOSE_PROJECT_NAME:-amanda}\n" + content
+else:
+    content = re.sub(r"^name:\s*.*$", "name: ${COMPOSE_PROJECT_NAME:-amanda}", content, flags=re.M)
 
-# 2. Renomear container_name: multiflow_ para amanda_
-content = re.sub(r'container_name:\s*multiflow_', 'container_name: amanda_', content)
-content = content.replace('multiflow_net', 'amanda_net')
-content = content.replace('multiflow_postgres', 'amanda_postgres')
-content = content.replace('multiflow_pgbouncer', 'amanda_pgbouncer')
-content = content.replace('multiflow_redis', 'amanda_redis')
-content = content.replace('multiflow_backend', 'amanda_backend')
-content = content.replace('multiflow_frontend', 'amanda_frontend')
-content = content.replace('multiflow_transcricao', 'amanda_transcricao')
-content = content.replace('multiflow_wuzapi', 'amanda_wuzapi')
+# 2. Parametrizar container_name para usar ${COMPOSE_PROJECT_NAME:-amanda}_
+content = re.sub(r'container_name:\s*(?:multiflow|amanda)_', 'container_name: ${COMPOSE_PROJECT_NAME:-amanda}_', content)
 
-# 3. Substituir APENAS o build do servico wuzapi por imagem oficial pré-compilada
+# 3. Parametrizar network para ${COMPOSE_PROJECT_NAME:-amanda}_net
+content = re.sub(r'name:\s*(?:multiflow|amanda)_net', 'name: ${COMPOSE_PROJECT_NAME:-amanda}_net', content)
+
+# 4. Parametrizar volumes externos para ${COMPOSE_PROJECT_NAME:-amanda}_<volume>
+content = re.sub(r'name:\s*(?:multiflow|amanda)_(postgres_data|redis_data|backend_database|backend_public|wuzapi_data)', r'name: ${COMPOSE_PROJECT_NAME:-amanda}_\1', content)
+
+# 5. Substituir APENAS o build do servico wuzapi por imagem oficial pré-compilada
 content = re.sub(
     r'(^[ ]{2}wuzapi:[ ]*\n)[ ]{4}build:[ ]*\n(?:[ ]{6,}.*\n)*',
     r'\1    image: asternic/wuzapi:latest\n',
@@ -1055,7 +1080,7 @@ content = re.sub(
     flags=re.M
 )
 
-# 4. Integrar api_oficial se nao estiver presente
+# 6. Integrar api_oficial se nao estiver presente
 if "api_oficial:" not in content and re.search(r'\nvolumes:\s*\n', content):
     api_oficial_block = f"""
   # ==========================================================
@@ -1065,7 +1090,7 @@ if "api_oficial:" not in content and re.search(r'\nvolumes:\s*\n', content):
     build:
       context: ./api_oficial
       dockerfile: Dockerfile
-    container_name: amanda_apioficial
+    container_name: ${{COMPOSE_PROJECT_NAME:-amanda}}_apioficial
     restart: always
     depends_on:
       postgres:
@@ -1101,46 +1126,54 @@ PYEOF
   chown -R deploy:deploy "${app_dir}"
   chmod -R 775 "${app_dir}"
 
-  # Criar volumes externos necessários com o nome amanda_
+  # Criar volumes externos necessários com o nome da empresa/projeto
+  local proj_name="${empresa:-amanda}"
   banner
-  printf "${WHITE} >> Criando volumes de dados persistentes do Docker...\n"
+  printf "${WHITE} >> Criando volumes de dados persistentes do Docker (${proj_name})...\n"
   echo
-  docker volume create amanda_postgres_data 2>/dev/null || true
-  docker volume create amanda_redis_data 2>/dev/null || true
-  docker volume create amanda_backend_database 2>/dev/null || true
-  docker volume create amanda_backend_public 2>/dev/null || true
-  docker volume create amanda_wuzapi_data 2>/dev/null || true
-  # Compatibilidade de volumes legados
-  docker volume create multiflow_postgres_data 2>/dev/null || true
-  docker volume create multiflow_redis_data 2>/dev/null || true
-  docker volume create multiflow_backend_database 2>/dev/null || true
-  docker volume create multiflow_backend_public 2>/dev/null || true
-  docker volume create multiflow_wuzapi_data 2>/dev/null || true
+  docker volume create "${proj_name}_postgres_data" 2>/dev/null || true
+  docker volume create "${proj_name}_redis_data" 2>/dev/null || true
+  docker volume create "${proj_name}_backend_database" 2>/dev/null || true
+  docker volume create "${proj_name}_backend_public" 2>/dev/null || true
+  docker volume create "${proj_name}_wuzapi_data" 2>/dev/null || true
+  # Compatibilidade de volumes legados caso seja amanda
+  if [ "${proj_name}" = "amanda" ]; then
+    docker volume create amanda_postgres_data 2>/dev/null || true
+    docker volume create amanda_redis_data 2>/dev/null || true
+    docker volume create amanda_backend_database 2>/dev/null || true
+    docker volume create amanda_backend_public 2>/dev/null || true
+    docker volume create amanda_wuzapi_data 2>/dev/null || true
+    docker volume create multiflow_postgres_data 2>/dev/null || true
+    docker volume create multiflow_redis_data 2>/dev/null || true
+    docker volume create multiflow_backend_database 2>/dev/null || true
+    docker volume create multiflow_backend_public 2>/dev/null || true
+    docker volume create multiflow_wuzapi_data 2>/dev/null || true
+  fi
 
   # Subir stack
   banner
-  printf "${WHITE} >> Construindo e iniciando todos os contêineres e APIs da AMANDA...\n"
+  printf "${WHITE} >> Construindo e iniciando todos os contêineres e APIs da AMANDA (${proj_name})...\n"
   printf "${YELLOW} >> Esse processo pode levar alguns minutos (download de imagens e build dos serviços)...\n"
   echo
   cd "${compose_dir}" || trata_erro "cd para compose_dir"
 
   # Validação de integridade do arquivo Compose antes de subir
-  if ! docker compose -p amanda config >/dev/null 2>&1; then
+  if ! docker compose -p "${proj_name}" config >/dev/null 2>&1; then
     printf "${YELLOW} >> Detectada divergência no docker-compose.yml. Restaurando compose limpo do repositório...${WHITE}\n"
     git checkout -f docker-compose.yml 2>/dev/null || true
   fi
 
-  limpar_conteineres_conflitantes "${compose_dir}"
+  limpar_conteineres_conflitantes "${compose_dir}" "${proj_name}"
   resolver_portas_automaticas
   sincronizar_todas_portas_env "${compose_dir}/.env"
 
-  if ! docker compose -p amanda up -d --build; then
+  if ! docker compose -p "${proj_name}" up -d --build; then
     printf "${YELLOW} >> Alerta ao subir contêineres. Limpando contêineres e reavaliando portas...${WHITE}\n"
-    limpar_conteineres_conflitantes "${compose_dir}"
+    limpar_conteineres_conflitantes "${compose_dir}" "${proj_name}"
     resolver_portas_automaticas
     sincronizar_todas_portas_env "${compose_dir}/.env"
     sleep 2
-    if ! docker compose -p amanda up -d; then
+    if ! docker compose -p "${proj_name}" up -d; then
       printf "${RED}══════════════════════════════════════════════════════════════════${WHITE}\n"
       printf "${RED}❌ ERRO CRÍTICO: Falha ao compilar e subir os contêineres Docker!${WHITE}\n"
       printf "${YELLOW}   Diretório: ${BLUE}${compose_dir}${WHITE}\n"
@@ -1150,11 +1183,14 @@ PYEOF
     fi
   fi
 
-  # Localizar dinamicamente os nomes dos contêineres iniciados
+  # Localizar dinamicamente os nomes dos contêineres iniciados para este projeto
   local pg_container be_container oficial_container
-  pg_container=$(docker ps --format '{{.Names}}' | grep -E 'postgres' | head -n 1)
-  be_container=$(docker ps --format '{{.Names}}' | grep -E 'backend' | head -n 1)
-  oficial_container=$(docker ps --format '{{.Names}}' | grep -E 'oficial' | head -n 1)
+  pg_container=$(docker ps --format '{{.Names}}' | grep -E "^${proj_name}_postgres" | head -n 1)
+  [ -z "$pg_container" ] && pg_container=$(docker ps --format '{{.Names}}' | grep -E "${proj_name}.*postgres" | head -n 1)
+  be_container=$(docker ps --format '{{.Names}}' | grep -E "^${proj_name}_backend" | head -n 1)
+  [ -z "$be_container" ] && be_container=$(docker ps --format '{{.Names}}' | grep -E "${proj_name}.*backend" | head -n 1)
+  oficial_container=$(docker ps --format '{{.Names}}' | grep -E "^${proj_name}_apioficial" | head -n 1)
+  [ -z "$oficial_container" ] && oficial_container=$(docker ps --format '{{.Names}}' | grep -E "${proj_name}.*oficial" | head -n 1)
 
   # Aguardar banco de dados ficar pronto
   banner
@@ -1168,7 +1204,7 @@ PYEOF
     fi
     tentativas=$((tentativas + 1))
     sleep 2
-    [ -z "$pg_container" ] && pg_container=$(docker ps --format '{{.Names}}' | grep -E 'postgres' | head -n 1)
+    [ -z "$pg_container" ] && pg_container=$(docker ps --format '{{.Names}}' | grep -E "^${proj_name}_postgres" | head -n 1)
   done
 
   # Criar banco da API Oficial no PostgreSQL se não existir
@@ -1207,9 +1243,9 @@ PYEOF
     docker restart "$oficial_container" 2>/dev/null || true
   fi
 
-  # Verificar se há contêineres rodando
+  # Verificar se há contêineres rodando para este projeto
   local total_rodando
-  total_rodando=$(docker ps --filter "name=multiflow" --filter "name=amanda" -q | wc -l)
+  total_rodando=$(docker ps --filter "name=${proj_name}_" -q | wc -l)
   if [ "$total_rodando" -eq 0 ]; then
     printf "${RED}══════════════════════════════════════════════════════════════════${WHITE}\n"
     printf "${RED}❌ ERRO: Nenhum contêiner da AMANDA está ativo após a instalação!${WHITE}\n"
@@ -1262,8 +1298,8 @@ PYEOF
 # ATUALIZAÇÃO DOCKER COMPOSE AMANDA
 # ================================================================
 atualizar_amanda_docker() {
-  local empresa="amanda"
-  local app_dir="/home/deploy/${empresa}"
+  selecionar_instancia_atualizar "atualizar" || return 0
+  local app_dir="/home/deploy/${empresa:-amanda}"
   local compose_dir
   compose_dir=$(localizar_diretorio_compose "${app_dir}")
 
@@ -1271,6 +1307,7 @@ atualizar_amanda_docker() {
   printf "   ${PURPLE}╔══════════════════════════════════════════════════════════════╗${WHITE}\n"
   printf "   ${PURPLE}║${WHITE}             ATUALIZAR AMANDA (DOCKER COMPOSE)                ${PURPLE}║${WHITE}\n"
   printf "   ${PURPLE}╚══════════════════════════════════════════════════════════════╝${WHITE}\n\n"
+  printf "   ${WHITE}Instância selecionada: ${GREEN}%s${WHITE}\n\n" "${empresa:-amanda}"
   printf "   ${WHITE}Deseja iniciar a atualização de todos os contêineres da AMANDA? (S/N): ${PURPLE}"
   read -r confirm_upd
   confirm_upd=$(echo "${confirm_upd}" | tr '[:lower:]' '[:upper:]')
@@ -1290,7 +1327,7 @@ atualizar_amanda_docker() {
   git clean -fd 2>/dev/null || true
 
   banner
-  printf "${PURPLE} >> Reconstruindo e reiniciando todos os contêineres da AMANDA...${WHITE}\n"
+  printf "${PURPLE} >> Reconstruindo e reiniciando todos os contêineres da AMANDA (${empresa:-amanda})...${WHITE}\n"
   cd "${compose_dir}" || cd "${app_dir}" || return 1
 
   # Assegurar componente WuzAPI
@@ -1298,11 +1335,14 @@ atualizar_amanda_docker() {
     git clone --depth 1 https://github.com/asternic/wuzapi.git "${compose_dir}/wuzapi" 2>/dev/null || true
   fi
   if [ -f "${compose_dir}/docker-compose.yml" ]; then
-    python3 - "${compose_dir}/docker-compose.yml" << 'PYEOF'
+    python3 - "${compose_dir}/docker-compose.yml" "${empresa:-amanda}" << 'PYEOF'
 import sys, re
 compose_file = sys.argv[1]
 with open(compose_file, "r", encoding="utf-8") as f:
     content = f.read()
+if not re.search(r"^name:\s*", content, re.M):
+    content = "name: ${COMPOSE_PROJECT_NAME:-amanda}\n" + content
+content = re.sub(r'container_name:\s*(?:multiflow|amanda)_', 'container_name: ${COMPOSE_PROJECT_NAME:-amanda}_', content)
 content = re.sub(
     r'(^[ ]{2}wuzapi:[ ]*\n)[ ]{4}build:[ ]*\n(?:[ ]{6,}.*\n)*',
     r'\1    image: asternic/wuzapi:latest\n',
@@ -1315,18 +1355,20 @@ PYEOF
   fi
 
   # Validação de integridade do Compose antes do build
-  if ! docker compose -p amanda config >/dev/null 2>&1; then
+  if ! docker compose -p "${empresa:-amanda}" config >/dev/null 2>&1; then
     printf "${YELLOW} >> Detectada anomalia no docker-compose.yml. Restaurando compose original do repositório...${WHITE}\n"
     git checkout -f docker-compose.yml 2>/dev/null || true
   fi
 
-  docker compose -p amanda pull 2>/dev/null || true
-  docker compose -p amanda up -d --build
+  docker compose -p "${empresa:-amanda}" pull 2>/dev/null || true
+  docker compose -p "${empresa:-amanda}" up -d --build
 
-  # Localizar contêineres dinamicamente
+  # Localizar contêineres dinamicamente para esta empresa
   local be_container oficial_container
-  be_container=$(docker ps --format '{{.Names}}' | grep -E 'backend' | head -n 1)
-  oficial_container=$(docker ps --format '{{.Names}}' | grep -E 'oficial' | head -n 1)
+  be_container=$(docker ps --format '{{.Names}}' | grep -E "^${empresa:-amanda}_backend" | head -n 1)
+  [ -z "$be_container" ] && be_container=$(docker ps --format '{{.Names}}' | grep -E "${empresa:-amanda}.*backend" | head -n 1)
+  oficial_container=$(docker ps --format '{{.Names}}' | grep -E "^${empresa:-amanda}_apioficial" | head -n 1)
+  [ -z "$oficial_container" ] && oficial_container=$(docker ps --format '{{.Names}}' | grep -E "${empresa:-amanda}.*oficial" | head -n 1)
 
   banner
   printf "${PURPLE} >> Executando migrações do banco de dados (Backend e API Oficial)...${WHITE}\n"
@@ -1350,29 +1392,32 @@ PYEOF
 # STATUS E REINICIALIZAÇÃO DE CONTÊINERES
 # ================================================================
 menu_status_reiniciar_containers() {
+  selecionar_instancia_atualizar "gerenciar contêineres" || return 0
+  local emp="${empresa:-amanda}"
   banner
   printf "   ${PURPLE}╔══════════════════════════════════════════════════════════════╗${WHITE}\n"
   printf "   ${PURPLE}║${WHITE}            STATUS E REINÍCIO DE CONTÊINERES                  ${PURPLE}║${WHITE}\n"
   printf "   ${PURPLE}╚══════════════════════════════════════════════════════════════╝${WHITE}\n\n"
-  docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" | grep -E "multiflow|amanda|NAMES" || docker ps
+  printf "   ${WHITE}Instância selecionada: ${GREEN}%s${WHITE}\n\n" "$emp"
+  docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" | grep -E "${emp}_|NAMES" || docker ps
   echo
   printf "   ${WHITE}Opções:\n"
-  printf "     [1] Reiniciar TODOS os contêineres AMANDA\n"
-  printf "     [2] Reiniciar apenas Backend (backend)\n"
-  printf "     [3] Reiniciar apenas Frontend (frontend)\n"
-  printf "     [4] Reiniciar apenas API Oficial (api_oficial)\n"
-  printf "     [5] Reiniciar apenas WuzAPI (wuzapi)\n"
-  printf "     [6] Reiniciar apenas Transcrição de Áudio (api_transcricao)\n"
+  printf "     [1] Reiniciar TODOS os contêineres da instância [%s]\n" "$emp"
+  printf "     [2] Reiniciar apenas Backend (${emp}_backend)\n"
+  printf "     [3] Reiniciar apenas Frontend (${emp}_frontend)\n"
+  printf "     [4] Reiniciar apenas API Oficial (${emp}_apioficial)\n"
+  printf "     [5] Reiniciar apenas WuzAPI (${emp}_wuzapi)\n"
+  printf "     [6] Reiniciar apenas Transcrição (${emp}_transcricao)\n"
   printf "     [0] Voltar ao Menu Principal\n\n"
   printf "${WHITE}   Escolha uma opção: ${PURPLE}"
   read -r op_rest
   case "$op_rest" in
-    1) docker restart $(docker ps -q --filter "name=amanda" --filter "name=multiflow") 2>/dev/null || true; printf "${GREEN} >> Todos os contêineres reiniciados!${WHITE}\n"; sleep 2 ;;
-    2) docker restart $(docker ps -q --filter "name=backend") 2>/dev/null || true; printf "${GREEN} >> Backend reiniciado!${WHITE}\n"; sleep 2 ;;
-    3) docker restart $(docker ps -q --filter "name=frontend") 2>/dev/null || true; printf "${GREEN} >> Frontend reiniciado!${WHITE}\n"; sleep 2 ;;
-    4) docker restart $(docker ps -q --filter "name=oficial") 2>/dev/null || true; printf "${GREEN} >> API Oficial reiniciada!${WHITE}\n"; sleep 2 ;;
-    5) docker restart $(docker ps -q --filter "name=wuzapi") 2>/dev/null || true; printf "${GREEN} >> WuzAPI reiniciada!${WHITE}\n"; sleep 2 ;;
-    6) docker restart $(docker ps -q --filter "name=transcricao") 2>/dev/null || true; printf "${GREEN} >> Transcrição reiniciada!${WHITE}\n"; sleep 2 ;;
+    1) docker restart $(docker ps -q --filter "name=${emp}_") 2>/dev/null || true; printf "${GREEN} >> Contêineres de ${emp} reiniciados!${WHITE}\n"; sleep 2 ;;
+    2) docker restart $(docker ps -q --filter "name=${emp}_backend") 2>/dev/null || true; printf "${GREEN} >> Backend de ${emp} reiniciado!${WHITE}\n"; sleep 2 ;;
+    3) docker restart $(docker ps -q --filter "name=${emp}_frontend") 2>/dev/null || true; printf "${GREEN} >> Frontend de ${emp} reiniciado!${WHITE}\n"; sleep 2 ;;
+    4) docker restart $(docker ps -q --filter "name=${emp}_apioficial") 2>/dev/null || true; printf "${GREEN} >> API Oficial de ${emp} reiniciada!${WHITE}\n"; sleep 2 ;;
+    5) docker restart $(docker ps -q --filter "name=${emp}_wuzapi") 2>/dev/null || true; printf "${GREEN} >> WuzAPI de ${emp} reiniciada!${WHITE}\n"; sleep 2 ;;
+    6) docker restart $(docker ps -q --filter "name=${emp}_transcricao") 2>/dev/null || true; printf "${GREEN} >> Transcrição de ${emp} reiniciada!${WHITE}\n"; sleep 2 ;;
     *) ;;
   esac
 }
@@ -1381,28 +1426,30 @@ menu_status_reiniciar_containers() {
 # LOGS EM TEMPO REAL
 # ================================================================
 menu_logs_containers() {
+  selecionar_instancia_atualizar "ver logs" || return 0
   banner
-  printf "${PURPLE} >> Exibindo logs dos contêineres (Pressione CTRL+C para sair dos logs e voltar)...\n${WHITE}"
+  printf "${PURPLE} >> Exibindo logs dos contêineres de [%s] (Pressione CTRL+C para sair dos logs e voltar)...\n${WHITE}" "${empresa:-amanda}"
   sleep 2
-  local empresa="amanda"
-  local app_dir="/home/deploy/${empresa}"
+  local app_dir="/home/deploy/${empresa:-amanda}"
   local compose_dir
   compose_dir=$(localizar_diretorio_compose "${app_dir}")
   cd "$compose_dir" 2>/dev/null || true
-  docker compose -p amanda logs -f --tail=100
+  docker compose -p "${empresa:-amanda}" logs -f --tail=100
 }
 
 # ================================================================
 # BACKUP DO BANCO POSTGRESQL (DOCKER)
 # ================================================================
 exec_backup_banco_docker() {
+  selecionar_instancia_atualizar "fazer backup" || return 0
   banner
-  printf "${PURPLE} >> Gerando backup do banco de dados PostgreSQL (Docker)...${WHITE}\n"
+  printf "${PURPLE} >> Gerando backup do banco de dados PostgreSQL ([%s])...${WHITE}\n" "${empresa:-amanda}"
   local backup_dir="/home/deploy/backups"
   mkdir -p "$backup_dir"
-  local backup_file="${backup_dir}/amanda_backup_$(date +%Y%m%d_%H%M%S).sql"
+  local backup_file="${backup_dir}/${empresa:-amanda}_backup_$(date +%Y%m%d_%H%M%S).sql"
   local pg_container
-  pg_container=$(docker ps --format '{{.Names}}' | grep -E 'postgres' | head -n 1)
+  pg_container=$(docker ps --format '{{.Names}}' | grep -E "^${empresa:-amanda}_postgres" | head -n 1)
+  [ -z "$pg_container" ] && pg_container=$(docker ps --format '{{.Names}}' | grep -E "${empresa:-amanda}.*postgres" | head -n 1)
   if [ -n "$pg_container" ] && docker exec "$pg_container" pg_dump -U "${empresa:-amanda}" "${empresa:-amanda}" > "$backup_file" 2>/dev/null; then
     printf "${GREEN} >> Backup gerado com sucesso em: ${PURPLE}%s${WHITE}\n" "$backup_file"
   else
@@ -1417,8 +1464,9 @@ exec_backup_banco_docker() {
 # RESTAURAR BANCO POSTGRESQL (DOCKER)
 # ================================================================
 exec_restaurar_banco_docker() {
+  selecionar_instancia_atualizar "restaurar backup" || return 0
   banner
-  printf "${PURPLE} >> Restaurar backup do banco de dados PostgreSQL (Docker)...${WHITE}\n"
+  printf "${PURPLE} >> Restaurar backup do banco de dados PostgreSQL ([%s])...${WHITE}\n" "${empresa:-amanda}"
   printf "${WHITE} >> Digite o caminho completo do arquivo .sql de backup: ${PURPLE}\n"
   read -r arq_backup
   if [ ! -f "$arq_backup" ]; then
@@ -1426,16 +1474,16 @@ exec_restaurar_banco_docker() {
     sleep 2
     return 1
   fi
-  printf "${YELLOW} >> ATENÇÃO: Os dados atuais serão substituídos pelo backup. Deseja continuar? (S/N): ${PURPLE}"
+  printf "${YELLOW} >> ATENÇÃO: Os dados atuais de [%s] serão substituídos pelo backup. Deseja continuar? (S/N): ${PURPLE}" "${empresa:-amanda}"
   read -r conf_rest
   conf_rest=$(echo "$conf_rest" | tr '[:lower:]' '[:upper:]')
   if [ "$conf_rest" = "S" ]; then
     local pg_c
-    pg_c=$(docker ps --format '{{.Names}}' | grep -E 'postgres' | head -n 1)
-    [ -z "$pg_c" ] && pg_c="amanda_postgres"
+    pg_c=$(docker ps --format '{{.Names}}' | grep -E "^${empresa:-amanda}_postgres" | head -n 1)
+    [ -z "$pg_c" ] && pg_c="${empresa:-amanda}_postgres"
     cat "$arq_backup" | docker exec -i "$pg_c" psql -U "${empresa:-amanda}" "${empresa:-amanda}"
     printf "${GREEN} >> Restauração concluída! Reiniciando backend...${WHITE}\n"
-    docker restart $(docker ps -q --filter "name=backend") 2>/dev/null || true
+    docker restart "${empresa:-amanda}_backend" 2>/dev/null || true
   fi
   echo
   printf "${WHITE}>> Pressione Enter para continuar...${WHITE}\n"
@@ -1450,40 +1498,153 @@ resetar_instalacao() {
   instalar_amanda_docker_stack
 }
 
+iniciar_instalacao_nova_instancia() {
+  banner
+  printf "   ${PURPLE}╔══════════════════════════════════════════════════════════════╗${WHITE}\n"
+  printf "   ${PURPLE}║${WHITE}         INSTALAR NOVA PLATAFORMA ADICIONAL (MULTI-EMPRESA)    ${PURPLE}║${WHITE}\n"
+  printf "   ${PURPLE}╚══════════════════════════════════════════════════════════════╝${WHITE}\n\n"
+  printf "${WHITE} >> Esta opção permite rodar mais de uma AMANDA de forma 100%% independente nesta VPS.\n"
+  printf "${WHITE} >> Cada instância terá seus próprios contêineres, volumes de banco e portas isoladas.\n\n"
+
+  detectar_instancias_instaladas
+  local nova_empresa=""
+  while true; do
+    printf "${WHITE} >> Digite o ${GREEN}Nome da Nova Empresa${WHITE} (letras minusculas, sem espaço/acentos, ex: amanda2, filial_sp): ${WHITE}\n"
+    read -p "> " nova_empresa
+    nova_empresa=$(echo "$nova_empresa" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9_-')
+    if [ -z "$nova_empresa" ]; then
+      printf "${RED}❌ O nome da empresa não pode ficar vazio.${WHITE}\n\n"
+      continue
+    fi
+    local duplicado=0
+    for e in "${NOMES_EMPRESAS_DETECTADAS[@]}"; do
+      if [ "$e" = "$nova_empresa" ]; then
+        duplicado=1
+        break
+      fi
+    done
+    if [ $duplicado -eq 1 ] || [ -d "/home/deploy/${nova_empresa}" ]; then
+      printf "${RED}❌ Já existe uma instalação com o nome '%s' nesta VPS! Escolha outro nome.${WHITE}\n\n" "$nova_empresa"
+      continue
+    fi
+    break
+  done
+
+  # Configurar variáveis de sessão específicas para a nova instância
+  empresa="${nova_empresa}"
+  ARQUIVO_VARIAVEIS="VARIAVEIS_INSTALACAO_INSTANCIA_${nova_empresa}"
+  ARQUIVO_ETAPAS="ETAPA_INSTALACAO_${nova_empresa}"
+  etapa=0
+  salvar_etapa 0
+
+  # Executar o fluxo padrão de coleta e confirmação de dados
+  questoes_dns_base || trata_erro "questoes_dns_base"
+  verificar_dns_base || trata_erro "verificar_dns_base"
+  questoes_variaveis_base || trata_erro "questoes_variaveis_base"
+  define_proxy_base || trata_erro "define_proxy_base"
+  define_portas_base || trata_erro "define_portas_base"
+  confirma_dados_instalacao_base || trata_erro "confirma_dados_instalacao_base"
+  questoes_otimizacao_nativa || trata_erro "questoes_otimizacao_nativa"
+  salvar_variaveis || trata_erro "salvar_variaveis"
+  salvar_etapa 1
+
+  # Executa a stack de instalação Docker 100% isolada
+  instalar_amanda_docker_stack
+}
+
+selecionar_instancia_para_reinstalar() {
+  detectar_instancias_instaladas
+  banner
+  printf "${WHITE} >> Selecione qual instalação deseja resetar ou reinstalar:\n\n"
+  for i in "${!NOMES_EMPRESAS_DETECTADAS[@]}"; do
+    printf "   [${BLUE}%d${WHITE}] %s (/home/deploy/%s)\n" "$((i+1))" "${NOMES_EMPRESAS_DETECTADAS[$i]}" "${NOMES_EMPRESAS_DETECTADAS[$i]}"
+  done
+  printf "   [${BLUE}0${WHITE}] Voltar ao Menu Principal\n\n"
+  read -p "> " sel
+  if [ "$sel" = "0" ] || [ -z "$sel" ]; then
+    return 0
+  fi
+  local idx=$((sel - 1))
+  if [ $idx -ge 0 ] && [ $idx -lt ${#INSTANCIAS_DETECTADAS[@]} ]; then
+    ARQUIVO_VARIAVEIS="${INSTANCIAS_DETECTADAS[$idx]}"
+    source "$ARQUIVO_VARIAVEIS" 2>/dev/null
+    if [ -f "ETAPA_INSTALACAO_${empresa}" ]; then
+      ARQUIVO_ETAPAS="ETAPA_INSTALACAO_${empresa}"
+    else
+      ARQUIVO_ETAPAS="ETAPA_INSTALACAO"
+    fi
+    resetar_instalacao
+  fi
+}
+
 # Pergunta se deseja continuar ou recomeçar
 verificar_arquivos_existentes() {
-  if [ -f $ARQUIVO_VARIAVEIS ] && [ -f $ARQUIVO_ETAPAS ]; then
+  detectar_instancias_instaladas
+  local total_instancias=${#INSTANCIAS_DETECTADAS[@]}
+
+  if [ $total_instancias -gt 0 ]; then
     banner
-    printf "${YELLOW} >> Dados de instalação anteriores detectados.\n"
+    printf "   ${PURPLE}╔══════════════════════════════════════════════════════════════╗${WHITE}\n"
+    printf "   ${PURPLE}║${WHITE}          GERENCIADOR DE INSTALAÇÕES (MULTI-EMPRESA)           ${PURPLE}║${WHITE}\n"
+    printf "   ${PURPLE}╚══════════════════════════════════════════════════════════════╝${WHITE}\n\n"
+    printf "${GREEN} >> Detectada(s) ${total_instancias} plataforma(s) instalada(s) nesta VPS:${WHITE}\n\n"
+    for i in "${!NOMES_EMPRESAS_DETECTADAS[@]}"; do
+      printf "      • ${BLUE}%s${WHITE} (/home/deploy/%s)\n" "${NOMES_EMPRESAS_DETECTADAS[$i]}" "${NOMES_EMPRESAS_DETECTADAS[$i]}"
+    done
     echo
+    printf "   [${BLUE}1${WHITE}] Instalar uma ${GREEN}NOVA PLATAFORMA ADICIONAL${WHITE} (Multi-Empresa / Nova Empresa)\n"
+    printf "   [${BLUE}2${WHITE}] Reinstalar ou Continuar instalação de uma empresa existente\n"
+    printf "   [${BLUE}0${WHITE}] Voltar ao Menu Principal\n\n"
+    read -p "> " escolha_modo
+    case "${escolha_modo}" in
+      1)
+        iniciar_instalacao_nova_instancia
+        ;;
+      2)
+        selecionar_instancia_para_reinstalar
+        ;;
+      0)
+        return 0
+        ;;
+      *)
+        printf "${RED}Opção inválida.${WHITE}\n"
+        sleep 2
+        return 0
+        ;;
+    esac
+  elif [ -f "$ARQUIVO_VARIAVEIS" ] && [ -f "$ARQUIVO_ETAPAS" ]; then
     carregar_etapa
     if [ "$etapa" -eq 21 ]; then
-      printf "${WHITE}>> Instalação já concluída.\n"
-      printf "${WHITE}>> Deseja resetar as etapas e começar do zero? (S/N): ${WHITE}\n"
-      echo
-      read -p "> " reset_escolha
-      echo
-      reset_escolha=$(echo "${reset_escolha}" | tr '[:lower:]' '[:upper:]')
-      if [ "$reset_escolha" == "S" ]; then
-        resetar_instalacao
-      else
-        printf "${GREEN} >> Voltando para o menu principal...${WHITE}\n"
-        sleep 2
-        menu
-      fi
+      banner
+      printf "${YELLOW} >> Instalação anterior detectada (já concluída).\n\n"
+      printf "   [${BLUE}1${WHITE}] Instalar uma ${GREEN}NOVA PLATAFORMA ADICIONAL${WHITE} (Multi-Empresa)\n"
+      printf "   [${BLUE}2${WHITE}] Resetar e reinstalar a plataforma atual (${empresa:-amanda})\n"
+      printf "   [${BLUE}0${WHITE}] Voltar ao Menu Principal\n\n"
+      read -p "> " escolha_inst
+      case "${escolha_inst}" in
+        1)
+          iniciar_instalacao_nova_instancia
+          ;;
+        2)
+          resetar_instalacao
+          ;;
+        0)
+          return 0
+          ;;
+        *)
+          return 0
+          ;;
+      esac
     elif [ "$etapa" -lt 21 ]; then
-      printf "${YELLOW} >> Instalação Incompleta Detectada na etapa $etapa. \n"
-      printf "${WHITE} >> Deseja continuar de onde parou? (S/N): ${WHITE}\n"
-      echo
-      read -p "> " escolha
-      echo
-      escolha=$(echo "${escolha}" | tr '[:lower:]' '[:upper:]')
-      if [ "$escolha" == "S" ]; then
+      banner
+      printf "${YELLOW} >> Instalação Incompleta Detectada na etapa $etapa.\n"
+      printf "${WHITE} >> Deseja continuar de onde parou? (S/N): ${WHITE}"
+      read -r escolha_cont
+      escolha_cont=$(echo "${escolha_cont}" | tr '[:lower:]' '[:upper:]')
+      if [ "$escolha_cont" == "S" ]; then
         instalar_amanda_docker_stack
       else
-        printf "${GREEN} >> Voltando ao menu principal...${WHITE}\n"
-        sleep 2
-        menu
+        return 0
       fi
     fi
   else
@@ -4199,6 +4360,8 @@ desinstalar_amanda_preservando_dados() {
 
   printf "${WHITE} >> 3. Removendo diretório de código da plataforma (${app_dir})...${WHITE}\n"
   rm -rf "${app_dir}" 2>/dev/null || true
+  rm -f "${INSTALADOR_DIR}/ETAPA_INSTALACAO_${empresa_alvo}" 2>/dev/null || true
+  [ "${empresa_alvo}" = "amanda" ] && rm -f "${INSTALADOR_DIR}/ETAPA_INSTALACAO" 2>/dev/null || true
 
   echo
   printf "${GREEN}══════════════════════════════════════════════════════════════════${WHITE}\n"
@@ -4287,6 +4450,13 @@ desinstalar_amanda_apagando_dados() {
 
   printf "${RED} >> 6. Apagando código-fonte e dados em disco (${app_dir})...${WHITE}\n"
   rm -rf "${app_dir}" 2>/dev/null || true
+
+  printf "${RED} >> 7. Removendo registros da instância ${empresa_alvo} no instalador...${WHITE}\n"
+  rm -f "${INSTALADOR_DIR}/VARIAVEIS_INSTALACAO_INSTANCIA_${empresa_alvo}" 2>/dev/null || true
+  rm -f "${INSTALADOR_DIR}/ETAPA_INSTALACAO_${empresa_alvo}" 2>/dev/null || true
+  if [ -f "${INSTALADOR_DIR}/VARIAVEIS_INSTALACAO" ] && grep -qw "empresa=${empresa_alvo}" "${INSTALADOR_DIR}/VARIAVEIS_INSTALACAO" 2>/dev/null; then
+    rm -f "${INSTALADOR_DIR}/VARIAVEIS_INSTALACAO" "${INSTALADOR_DIR}/ETAPA_INSTALACAO" 2>/dev/null || true
+  fi
 
   echo
   printf "${RED}══════════════════════════════════════════════════════════════════${WHITE}\n"
@@ -4522,62 +4692,81 @@ instalacao_base() {
 detectar_instancias_instaladas() {
   local instancias=()
   local nomes_empresas=()
-  local temp_empresa=""
-  local temp_subdominio_backend=""
-  local temp_subdominio_frontend=""
-  
-  # Verificar instalação base (arquivo VARIAVEIS_INSTALACAO)
   INSTALADOR_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  if [ -f "${INSTALADOR_DIR}/${ARQUIVO_VARIAVEIS}" ]; then
-    # Salvar variáveis atuais
-    local empresa_original="${empresa:-}"
-    local subdominio_backend_original="${subdominio_backend:-}"
-    local subdominio_frontend_original="${subdominio_frontend:-}"
-    
-    # Carregar variáveis do arquivo
-    source "${INSTALADOR_DIR}/${ARQUIVO_VARIAVEIS}" 2>/dev/null
-    temp_empresa="${empresa:-}"
-    
-    if [ -n "${temp_empresa}" ] && [ -d "/home/deploy/${temp_empresa}" ] && [ -d "/home/deploy/${temp_empresa}/backend" ]; then
-      instancias+=("${INSTALADOR_DIR}/${ARQUIVO_VARIAVEIS}")
-      nomes_empresas+=("${temp_empresa}")
+
+  checar_e_adicionar_instancia() {
+    local arq="$1"
+    [ ! -f "$arq" ] && return 0
+    case "$arq" in
+      *.backup*|*.bak*|*.old*) return 0 ;;
+    esac
+
+    local emp=""
+    emp=$(grep -E "^empresa=" "$arq" 2>/dev/null | cut -d'=' -f2- | tr -d '"\r ')
+    [ -z "$emp" ] && return 0
+
+    # Evitar duplicados no array
+    local ja_tem=0
+    for n in "${nomes_empresas[@]}"; do
+      if [ "$n" = "$emp" ]; then
+        ja_tem=1
+        break
+      fi
+    done
+    [ $ja_tem -eq 1 ] && return 0
+
+    local app="/home/deploy/${emp}"
+    if [ -d "$app" ] && { [ -d "${app}/backend" ] || [ -d "${app}/amanda" ] || [ -f "${app}/docker-compose.yml" ] || [ -f "${app}/amanda/docker-compose.yml" ] || [ -f "${app}/.env" ] || [ -f "${app}/amanda/.env" ]; }; then
+      instancias+=("$arq")
+      nomes_empresas+=("$emp")
     fi
-    
-    # Restaurar variáveis originais
-    empresa="${empresa_original}"
-    subdominio_backend="${subdominio_backend_original}"
-    subdominio_frontend="${subdominio_frontend_original}"
+  }
+
+  # 1. Verificar instalação base (arquivo VARIAVEIS_INSTALACAO)
+  if [ -f "${INSTALADOR_DIR}/${ARQUIVO_VARIAVEIS}" ]; then
+    checar_e_adicionar_instancia "${INSTALADOR_DIR}/${ARQUIVO_VARIAVEIS}"
+  elif [ -f "${INSTALADOR_DIR}/VARIAVEIS_INSTALACAO" ]; then
+    checar_e_adicionar_instancia "${INSTALADOR_DIR}/VARIAVEIS_INSTALACAO"
   fi
-  
-  # Verificar instâncias adicionais (arquivos VARIAVEIS_INSTALACAO_INSTANCIA_*)
+
+  # 2. Verificar instâncias adicionais (arquivos VARIAVEIS_INSTALACAO_INSTANCIA_*)
   if [ -d "${INSTALADOR_DIR}" ]; then
     for arquivo_instancia in "${INSTALADOR_DIR}"/VARIAVEIS_INSTALACAO_INSTANCIA_*; do
-      if [ -f "$arquivo_instancia" ]; then
-        case "$arquivo_instancia" in
-          *.backup*|*.bak*|*.old*) continue ;;
+      [ -f "$arquivo_instancia" ] && checar_e_adicionar_instancia "$arquivo_instancia"
+    done
+  fi
+
+  # 3. Varredura direta em /home/deploy/* como segurança adicional
+  if [ -d "/home/deploy" ]; then
+    for d in /home/deploy/*; do
+      if [ -d "$d" ]; then
+        local bname
+        bname=$(basename "$d")
+        case "$bname" in
+          deploy|backup*|lost+found) continue ;;
         esac
-        # Salvar variáveis atuais
-        local empresa_original="${empresa:-}"
-        local subdominio_backend_original="${subdominio_backend:-}"
-        local subdominio_frontend_original="${subdominio_frontend:-}"
-        
-        # Carregar variáveis do arquivo
-        source "$arquivo_instancia" 2>/dev/null
-        temp_empresa="${empresa:-}"
-        
-        if [ -n "${temp_empresa}" ] && [ -d "/home/deploy/${temp_empresa}" ] && [ -d "/home/deploy/${temp_empresa}/backend" ]; then
-          instancias+=("$arquivo_instancia")
-          nomes_empresas+=("${temp_empresa}")
+        local ja_tem=0
+        for n in "${nomes_empresas[@]}"; do
+          if [ "$n" = "$bname" ]; then
+            ja_tem=1
+            break
+          fi
+        done
+        if [ $ja_tem -eq 0 ]; then
+          if [ -f "${d}/amanda/docker-compose.yml" ] || [ -f "${d}/docker-compose.yml" ] || [ -f "${d}/.env" ] || [ -f "${d}/amanda/.env" ]; then
+            if [ -f "${INSTALADOR_DIR}/VARIAVEIS_INSTALACAO_INSTANCIA_${bname}" ]; then
+              instancias+=("${INSTALADOR_DIR}/VARIAVEIS_INSTALACAO_INSTANCIA_${bname}")
+              nomes_empresas+=("$bname")
+            elif [ -f "${INSTALADOR_DIR}/VARIAVEIS_INSTALACAO" ] && grep -qw "empresa=${bname}" "${INSTALADOR_DIR}/VARIAVEIS_INSTALACAO" 2>/dev/null; then
+              instancias+=("${INSTALADOR_DIR}/VARIAVEIS_INSTALACAO")
+              nomes_empresas+=("$bname")
+            fi
+          fi
         fi
-        
-        # Restaurar variáveis originais
-        empresa="${empresa_original}"
-        subdominio_backend="${subdominio_backend_original}"
-        subdominio_frontend="${subdominio_frontend_original}"
       fi
     done
   fi
-  
+
   # Retornar arrays (usando variáveis globais)
   declare -g INSTANCIAS_DETECTADAS=("${instancias[@]}")
   declare -g NOMES_EMPRESAS_DETECTADAS=("${nomes_empresas[@]}")
@@ -4880,12 +5069,19 @@ questoes_variaveis_base() {
   read -p "> " email_deploy
   echo
   # DEFINE NOME DA EMPRESA
-  banner
-  printf "${WHITE} >> Digite o nome da sua empresa (Letras minusculas e sem espaço) [padrão: amanda]: \n"
-  echo
-  read -p "> " empresa
-  empresa="${empresa:-amanda}"
-  echo
+  if [ -z "${empresa:-}" ]; then
+    banner
+    printf "${WHITE} >> Digite o nome da sua empresa (Letras minusculas e sem espaço) [padrão: amanda]: \n"
+    echo
+    read -p "> " empresa
+    empresa="${empresa:-amanda}"
+    empresa=$(echo "$empresa" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9_-')
+    echo
+  else
+    banner
+    printf "${WHITE} >> Empresa definida: ${GREEN}%s${WHITE}\n\n" "$empresa"
+    sleep 1
+  fi
   # DEFINE SENHA BASE
   banner
   printf "${WHITE} >> Insira a senha para o usuario Deploy, Redis e Banco de Dados [padrão: Acertitech13@]: \n"
@@ -5102,8 +5298,18 @@ define_portas_base() {
   echo
 
   if [ "${use_default_ports}" = "s" ]; then
-    backend_port=${default_backend_port}
-    frontend_port=${default_frontend_port}
+    if testar_porta_tcp_ocupada "${default_backend_port}"; then
+      backend_port=$(proxima_porta_livre "${default_backend_port}")
+      printf "${YELLOW} >> Porta 8080 em uso na VPS. Backend alocado na porta livre ${backend_port} (8080 + $((backend_port - 8080))).${WHITE}\n"
+    else
+      backend_port=${default_backend_port}
+    fi
+    if testar_porta_tcp_ocupada "${default_frontend_port}"; then
+      frontend_port=$(proxima_porta_livre "${default_frontend_port}")
+      printf "${YELLOW} >> Porta 3000 em uso na VPS. Frontend alocado na porta livre ${frontend_port} (3000 + $((frontend_port - 3000))).${WHITE}\n"
+    else
+      frontend_port=${default_frontend_port}
+    fi
   else
     while true; do
       printf "${WHITE} >> Qual porta deseja para o Backend? [padrão: 8080]: ${WHITE}\n"
@@ -7271,7 +7477,7 @@ server {
   }
 }
 END
-ln -s /etc/nginx/sites-available/${empresa}-frontend /etc/nginx/sites-enabled
+ln -sf /etc/nginx/sites-available/${empresa}-frontend /etc/nginx/sites-enabled/
 EOF
 
     sleep 2
@@ -7282,14 +7488,14 @@ EOF
     backend_hostname=$(echo "${subdominio_backend/https:\/\//}")
     sudo su - root <<EOF
 cat > /etc/nginx/sites-available/${empresa}-backend << 'END'
-upstream backend {
+upstream ${empresa}_backend {
         server 127.0.0.1:${backend_port};
         keepalive 32;
     }
 server {
   server_name ${backend_hostname};
   location / {
-    proxy_pass http://backend;
+    proxy_pass http://${empresa}_backend;
     proxy_http_version 1.1;
     proxy_set_header Upgrade \$http_upgrade;
     proxy_set_header Connection 'upgrade';
@@ -7302,7 +7508,7 @@ server {
   }
 }
 END
-ln -s /etc/nginx/sites-available/${empresa}-backend /etc/nginx/sites-enabled
+ln -sf /etc/nginx/sites-available/${empresa}-backend /etc/nginx/sites-enabled/
 EOF
 
     sleep 2
