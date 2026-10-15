@@ -4379,28 +4379,63 @@ desinstalar_amanda_preservando_dados() {
   printf "${WHITE} >> 1. Parando e removendo contêineres Docker da ${PURPLE}%s${WHITE} (Preservando Volumes)...${WHITE}\n" "${empresa_alvo}"
   echo
   if [ -d "${compose_dir}" ] && [ -f "${compose_dir}/docker-compose.yml" ]; then
-    (cd "${compose_dir}" && docker compose -p "${empresa_alvo}" down 2>/dev/null || true)
+    (cd "${compose_dir}" && docker compose -p "${empresa_alvo}" down --rmi local --remove-orphans 2>/dev/null || true)
   fi
-  docker compose -p "${empresa_alvo}" down 2>/dev/null || true
+  docker compose -p "${empresa_alvo}" down --rmi local --remove-orphans 2>/dev/null || true
 
   # Remover APENAS contêineres que pertençam a esta plataforma específica
   local c_ids
-  c_ids=$(docker ps -a --format '{{.ID}} {{.Names}}' 2>/dev/null | grep -E " ${empresa_alvo}_" | awk '{print $1}')
-  if [ -n "$c_ids" ]; then
-    docker rm -f $c_ids 2>/dev/null || true
+  c_ids=$(docker ps -a --format '{{.ID}} {{.Names}}' 2>/dev/null | grep -E " (${empresa_alvo}_|${empresa_alvo}-)" | awk '{print $1}')
+  local c_ids_label
+  c_ids_label=$(docker ps -a -q --filter "label=com.docker.compose.project=${empresa_alvo}" 2>/dev/null)
+  local all_c_ids
+  all_c_ids=$(printf "%s\n%s\n" "$c_ids" "$c_ids_label" | sed '/^$/d' | sort -u)
+  if [ -n "$all_c_ids" ]; then
+    docker rm -f $all_c_ids 2>/dev/null || true
   fi
 
-  printf "${WHITE} >> 2. Removendo configurações do Nginx exclusivas de ${PURPLE}%s${WHITE}...${WHITE}\n" "${empresa_alvo}"
+  printf "${WHITE} >> 2. Removendo imagens Docker exclusivas de ${PURPLE}%s${WHITE}...${WHITE}\n" "${empresa_alvo}"
+  local imgs_by_label
+  imgs_by_label=$(docker images -q --filter "label=com.docker.compose.project=${empresa_alvo}" 2>/dev/null)
+  local imgs_by_name
+  imgs_by_name=$(docker images --format '{{.ID}} {{.Repository}}' 2>/dev/null | grep -E " (${empresa_alvo}-|${empresa_alvo}_|${empresa_alvo}:)" | awk '{print $1}')
+  local all_imgs
+  all_imgs=$(printf "%s\n%s\n" "$imgs_by_label" "$imgs_by_name" | sed '/^$/d' | sort -u)
+  if [ -n "$all_imgs" ]; then
+    for img in $all_imgs; do
+      local img_repo
+      img_repo=$(docker images --format '{{.Repository}}:{{.Tag}}' "$img" 2>/dev/null | head -1)
+      printf "   ${GRAY}- Removendo imagem: %s (%s)${WHITE}\n" "$img" "${img_repo:-sem tag}"
+      docker rmi -f "$img" 2>/dev/null || true
+    done
+    docker image prune -f 2>/dev/null || true
+  fi
+
+  printf "${WHITE} >> 3. Removendo rede Docker exclusiva de ${PURPLE}%s${WHITE}...${WHITE}\n" "${empresa_alvo}"
+  docker network rm "${empresa_alvo}_net" 2>/dev/null || true
+  docker network rm "${empresa_alvo}-net" 2>/dev/null || true
+  docker network rm "${empresa_alvo}_default" 2>/dev/null || true
+
+  printf "${WHITE} >> 4. Removendo configurações do Nginx exclusivas de ${PURPLE}%s${WHITE}...${WHITE}\n" "${empresa_alvo}"
   rm -f /etc/nginx/sites-enabled/${empresa_alvo}-* 2>/dev/null || true
   rm -f /etc/nginx/sites-available/${empresa_alvo}-* 2>/dev/null || true
+  rm -f /etc/nginx/sites-enabled/${empresa_alvo}.* 2>/dev/null || true
+  rm -f /etc/nginx/sites-available/${empresa_alvo}.* 2>/dev/null || true
+  rm -f /etc/nginx/conf.d/${empresa_alvo}-*.conf 2>/dev/null || true
+  rm -f /etc/nginx/conf.d/${empresa_alvo}.*.conf 2>/dev/null || true
   systemctl reload nginx 2>/dev/null || true
 
-  printf "${WHITE} >> 3. Removendo diretório de código da plataforma (${app_dir})...${WHITE}\n"
+  printf "${WHITE} >> 5. Removendo diretório de código da plataforma (${app_dir})...${WHITE}\n"
   sudo rm -rf "${app_dir}" 2>/dev/null || true
-  [ -d "/home/deploy/multiflow" ] && sudo rm -rf "/home/deploy/multiflow" 2>/dev/null || true
+  if [ "${empresa_alvo}" = "multiflow" ]; then
+    [ -d "/home/deploy/multiflow" ] && sudo rm -rf "/home/deploy/multiflow" 2>/dev/null || true
+  fi
   sudo rm -rf "/home/deploy/personalizacoes/${empresa_alvo}" 2>/dev/null || true
+  rm -f "${INSTALADOR_DIR}/VARIAVEIS_INSTALACAO_INSTANCIA_${empresa_alvo}" 2>/dev/null || true
   rm -f "${INSTALADOR_DIR}/ETAPA_INSTALACAO_${empresa_alvo}" 2>/dev/null || true
-  [ "${empresa_alvo}" = "amanda" ] && rm -f "${INSTALADOR_DIR}/ETAPA_INSTALACAO" 2>/dev/null || true
+  if [ -f "${INSTALADOR_DIR}/VARIAVEIS_INSTALACAO" ] && grep -qw "empresa=${empresa_alvo}" "${INSTALADOR_DIR}/VARIAVEIS_INSTALACAO" 2>/dev/null; then
+    rm -f "${INSTALADOR_DIR}/VARIAVEIS_INSTALACAO" "${INSTALADOR_DIR}/ETAPA_INSTALACAO" 2>/dev/null || true
+  fi
 
   local outras_plataformas=0
   if [ -d "/home/deploy" ]; then
@@ -4411,7 +4446,7 @@ desinstalar_amanda_preservando_dados() {
         case "$b_item" in
           .*|backup*|lost+found|personalizacoes) continue ;;
         esac
-        if [ "$b_item" != "${empresa_alvo}" ] && [ "$b_item" != "multiflow" ]; then
+        if [ "$b_item" != "${empresa_alvo}" ]; then
           outras_plataformas=1
           break
         fi
@@ -4429,7 +4464,7 @@ desinstalar_amanda_preservando_dados() {
   echo
   printf "${GREEN}══════════════════════════════════════════════════════════════════${WHITE}\n"
   printf "${GREEN}✅ PLATAFORMA DOCKER [%s] DESINSTALADA COM SUCESSO!${WHITE}\n" "${empresa_alvo}"
-  printf "${WHITE}   Os contêineres e códigos da plataforma foram removidos.\n"
+  printf "${WHITE}   Os contêineres, imagens e códigos da plataforma foram removidos.\n"
   printf "${WHITE}   Nenhum processo do PM2 ou de outras plataformas foi afetado.\n"
   printf "${GREEN}   ✓ Volumes de dados preservados na VPS:${WHITE}\n"
   docker volume ls --filter "name=${empresa_alvo}_" --format "     - {{.Name}}" 2>/dev/null || true
@@ -4458,9 +4493,10 @@ desinstalar_amanda_apagando_dados() {
   printf "   ${RED}✖${WHITE} Todos os Bancos de Dados PostgreSQL de ${empresa_alvo} (mensagens, tickets, clientes)\n"
   printf "   ${RED}✖${WHITE} Todas as Filas e Cache Redis de ${empresa_alvo}\n"
   printf "   ${RED}✖${WHITE} Todas as sessões salvas de WhatsApp e arquivos de mídia da ${empresa_alvo}\n"
-  printf "   ${RED}✖${WHITE} Todos os Volumes Docker persistentes exclusivos da ${empresa_alvo}\n"
+  printf "   ${RED}✖${WHITE} Todos os Volumes Docker persistentes e anônimos exclusivos da ${empresa_alvo}\n"
+  printf "   ${RED}✖${WHITE} Todas as Imagens Docker criadas para a ${empresa_alvo}\n"
   printf "   ${RED}✖${WHITE} Todos os contêineres e código em /home/deploy/${empresa_alvo}\n\n"
-  printf "${CYAN} ℹ️  Processos do PM2 e outras plataformas no servidor NÃO serão tocados.${WHITE}\n\n"
+  printf "${CYAN} ℹ️  Processos do PM2, Portainer e outras plataformas no servidor NÃO serão tocados.${WHITE}\n\n"
 
   printf "${WHITE} >> Tem certeza absoluta que deseja DESTRUIR OS DADOS da plataforma ${PURPLE}%s${WHITE}? (S/N): " "${empresa_alvo}"
   read -r resp_conf1
@@ -4482,38 +4518,81 @@ desinstalar_amanda_apagando_dados() {
   fi
 
   banner
-  printf "${RED} >> 1. Parando e destruindo contêineres e volumes Compose da ${empresa_alvo}...${WHITE}\n"
+  printf "${RED} >> 1. Parando contêineres e volumes Compose da plataforma ${empresa_alvo}...${WHITE}\n"
   echo
   if [ -d "${compose_dir}" ] && [ -f "${compose_dir}/docker-compose.yml" ]; then
-    (cd "${compose_dir}" && docker compose -p "${empresa_alvo}" down -v --remove-orphans 2>/dev/null || true)
+    (cd "${compose_dir}" && docker compose -p "${empresa_alvo}" down --rmi local -v --remove-orphans 2>/dev/null || true)
   fi
-  docker compose -p "${empresa_alvo}" down -v --remove-orphans 2>/dev/null || true
+  docker compose -p "${empresa_alvo}" down --rmi local -v --remove-orphans 2>/dev/null || true
 
-  printf "${RED} >> 2. Forçando remoção apenas de contêineres de ${empresa_alvo}...${WHITE}\n"
+  printf "${RED} >> 2. Forçando remoção de contêineres residuais de ${empresa_alvo}...${WHITE}\n"
   local c_ids
-  c_ids=$(docker ps -a --format '{{.ID}} {{.Names}}' 2>/dev/null | grep -E " ${empresa_alvo}_" | awk '{print $1}')
-  if [ -n "$c_ids" ]; then
-    docker rm -f $c_ids 2>/dev/null || true
+  c_ids=$(docker ps -a --format '{{.ID}} {{.Names}}' 2>/dev/null | grep -E " (${empresa_alvo}_|${empresa_alvo}-)" | awk '{print $1}')
+  local c_ids_label
+  c_ids_label=$(docker ps -a -q --filter "label=com.docker.compose.project=${empresa_alvo}" 2>/dev/null)
+  local all_c_ids
+  all_c_ids=$(printf "%s\n%s\n" "$c_ids" "$c_ids_label" | sed '/^$/d' | sort -u)
+  if [ -n "$all_c_ids" ]; then
+    docker rm -f -v $all_c_ids 2>/dev/null || true
   fi
 
-  printf "${RED} >> 3. APAGANDO VOLUMES DOCKER EXCLUSIVOS DA ${empresa_alvo}...${WHITE}\n"
-  local vols
-  vols=$(docker volume ls -q 2>/dev/null | grep -E "^${empresa_alvo}_")
-  if [ -n "$vols" ]; then
-    docker volume rm -f $vols 2>/dev/null || true
+  printf "${RED} >> 3. APAGANDO TODOS OS VOLUMES DOCKER EXCLUSIVOS DA ${empresa_alvo}...${WHITE}\n"
+  local vols_by_prefix
+  vols_by_prefix=$(docker volume ls -q 2>/dev/null | grep -E "^(${empresa_alvo}_|${empresa_alvo}-)")
+  local vols_by_label
+  vols_by_label=$(docker volume ls -q --filter "label=com.docker.compose.project=${empresa_alvo}" 2>/dev/null)
+  local all_vols
+  all_vols=$(printf "%s\n%s\n" "$vols_by_prefix" "$vols_by_label" | sed '/^$/d' | sort -u)
+  if [ -n "$all_vols" ]; then
+    for v in $all_vols; do
+      printf "   ${GRAY}- Apagando volume: ${v}${WHITE}\n"
+      docker volume rm -f "$v" 2>/dev/null || true
+    done
+  else
+    printf "   ${GRAY}(Nenhum volume residual encontrado para ${empresa_alvo})${WHITE}\n"
   fi
 
-  printf "${RED} >> 4. Removendo rede Docker exclusiva da ${empresa_alvo}...${WHITE}\n"
+  printf "${RED} >> 4. APAGANDO TODAS AS IMAGENS DOCKER EXCLUSIVAS DA ${empresa_alvo}...${WHITE}\n"
+  # Imagens com label do Compose da empresa
+  local imgs_by_label
+  imgs_by_label=$(docker images -q --filter "label=com.docker.compose.project=${empresa_alvo}" 2>/dev/null)
+  # Imagens com tag/nome contendo o prefixo da empresa (ex: amanda-backend, amanda-frontend, amanda_*)
+  local imgs_by_name
+  imgs_by_name=$(docker images --format '{{.ID}} {{.Repository}}' 2>/dev/null | grep -E " (${empresa_alvo}-|${empresa_alvo}_|${empresa_alvo}:)" | awk '{print $1}')
+  local all_imgs
+  all_imgs=$(printf "%s\n%s\n" "$imgs_by_label" "$imgs_by_name" | sed '/^$/d' | sort -u)
+  if [ -n "$all_imgs" ]; then
+    for img in $all_imgs; do
+      local img_repo
+      img_repo=$(docker images --format '{{.Repository}}:{{.Tag}}' "$img" 2>/dev/null | head -1)
+      printf "   ${GRAY}- Apagando imagem: %s (%s)${WHITE}\n" "$img" "${img_repo:-sem tag}"
+      docker rmi -f "$img" 2>/dev/null || true
+    done
+  else
+    printf "   ${GRAY}(Nenhuma imagem residual encontrada para ${empresa_alvo})${WHITE}\n"
+  fi
+  # Limpar imagens intermediárias/órfãs (dangling) sem tag geradas durante o build desta plataforma
+  docker image prune -f 2>/dev/null || true
+
+  printf "${RED} >> 5. Removendo rede Docker exclusiva da ${empresa_alvo}...${WHITE}\n"
   docker network rm "${empresa_alvo}_net" 2>/dev/null || true
+  docker network rm "${empresa_alvo}-net" 2>/dev/null || true
+  docker network rm "${empresa_alvo}_default" 2>/dev/null || true
 
-  printf "${RED} >> 5. Removendo configurações do Nginx de ${empresa_alvo}...${WHITE}\n"
+  printf "${RED} >> 6. Removendo configurações do Nginx de ${empresa_alvo}...${WHITE}\n"
   rm -f /etc/nginx/sites-enabled/${empresa_alvo}-* 2>/dev/null || true
   rm -f /etc/nginx/sites-available/${empresa_alvo}-* 2>/dev/null || true
+  rm -f /etc/nginx/sites-enabled/${empresa_alvo}.* 2>/dev/null || true
+  rm -f /etc/nginx/sites-available/${empresa_alvo}.* 2>/dev/null || true
+  rm -f /etc/nginx/conf.d/${empresa_alvo}-*.conf 2>/dev/null || true
+  rm -f /etc/nginx/conf.d/${empresa_alvo}.*.conf 2>/dev/null || true
   systemctl reload nginx 2>/dev/null || true
 
-  printf "${RED} >> 6. Apagando código-fonte e dados em disco (${app_dir})...${WHITE}\n"
+  printf "${RED} >> 7. Apagando código-fonte e dados em disco (${app_dir})...${WHITE}\n"
   sudo rm -rf "${app_dir}" 2>/dev/null || true
-  [ -d "/home/deploy/multiflow" ] && sudo rm -rf "/home/deploy/multiflow" 2>/dev/null || true
+  if [ "${empresa_alvo}" = "multiflow" ]; then
+    [ -d "/home/deploy/multiflow" ] && sudo rm -rf "/home/deploy/multiflow" 2>/dev/null || true
+  fi
   sudo rm -rf "/home/deploy/personalizacoes/${empresa_alvo}" 2>/dev/null || true
 
   local outras_plataformas=0
@@ -4525,7 +4604,7 @@ desinstalar_amanda_apagando_dados() {
         case "$b_item" in
           .*|backup*|lost+found|personalizacoes) continue ;;
         esac
-        if [ "$b_item" != "${empresa_alvo}" ] && [ "$b_item" != "multiflow" ]; then
+        if [ "$b_item" != "${empresa_alvo}" ]; then
           outras_plataformas=1
           break
         fi
@@ -4540,7 +4619,7 @@ desinstalar_amanda_apagando_dados() {
     printf "${GREEN} >> Plataforma ${empresa_alvo} removida de /home/deploy. Demais plataformas preservadas.${WHITE}\n"
   fi
 
-  printf "${RED} >> 7. Removendo registros da instância ${empresa_alvo} no instalador...${WHITE}\n"
+  printf "${RED} >> 8. Removendo registros da instância ${empresa_alvo} no instalador...${WHITE}\n"
   rm -f "${INSTALADOR_DIR}/VARIAVEIS_INSTALACAO_INSTANCIA_${empresa_alvo}" 2>/dev/null || true
   rm -f "${INSTALADOR_DIR}/ETAPA_INSTALACAO_${empresa_alvo}" 2>/dev/null || true
   if [ -f "${INSTALADOR_DIR}/VARIAVEIS_INSTALACAO" ] && grep -qw "empresa=${empresa_alvo}" "${INSTALADOR_DIR}/VARIAVEIS_INSTALACAO" 2>/dev/null; then
@@ -4550,8 +4629,8 @@ desinstalar_amanda_apagando_dados() {
   echo
   printf "${RED}══════════════════════════════════════════════════════════════════${WHITE}\n"
   printf "${RED}💥 DESINSTALAÇÃO DA PLATAFORMA [%s] CONCLUÍDA!${WHITE}\n" "${empresa_alvo}"
-  printf "${WHITE}   Contêineres, códigos e bancos de dados de [%s] foram removidos.\n" "${empresa_alvo}"
-  printf "${GREEN}   Nenhum processo PM2 ou de outras plataformas foi tocado.${WHITE}\n"
+  printf "${WHITE}   Contêineres, imagens, volumes, códigos e bancos de dados de [%s] foram removidos.\n" "${empresa_alvo}"
+  printf "${GREEN}   Nenhum processo PM2, imagem base ou contêiner de outras plataformas foi tocado.${WHITE}\n"
   printf "${RED}══════════════════════════════════════════════════════════════════${WHITE}\n\n"
   printf "${WHITE}Pressione Enter para voltar ao menu...${WHITE}"
   read -r
