@@ -1056,9 +1056,15 @@ EOF
     fi
   fi
 
-  # Padronizar e otimizar docker-compose.yml com precisão total (100% amanda_, wuzapi oficial e api_oficial integrada)
+  # Assegurar Dockerfiles para que todas as imagens sejam construídas e tagueadas com o nome da empresa
+  [ -f "${compose_dir}/postgres/Dockerfile" ] || (mkdir -p "${compose_dir}/postgres" && echo "FROM postgres:17" > "${compose_dir}/postgres/Dockerfile")
+  [ -f "${compose_dir}/redis/Dockerfile" ] || (mkdir -p "${compose_dir}/redis" && echo "FROM redis:7.4-alpine" > "${compose_dir}/redis/Dockerfile")
+  [ -f "${compose_dir}/pgbouncer/Dockerfile" ] || (mkdir -p "${compose_dir}/pgbouncer" && echo "FROM edoburu/pgbouncer:1.21.0-p2" > "${compose_dir}/pgbouncer/Dockerfile")
+  [ -f "${compose_dir}/wuzapi/Dockerfile.official" ] || (mkdir -p "${compose_dir}/wuzapi" && echo "FROM asternic/wuzapi:latest" > "${compose_dir}/wuzapi/Dockerfile.official")
+
+  # Padronizar e otimizar docker-compose.yml com precisão total (100% amanda_, todas imagens com prefixo da empresa)
   if [ -f "${compose_dir}/docker-compose.yml" ]; then
-    printf "${PURPLE} >> Padronizando docker-compose.yml para AMANDA e integrando microsserviços...${WHITE}\n"
+    printf "${PURPLE} >> Padronizando docker-compose.yml para AMANDA e tagueando todas imagens com a empresa...${WHITE}\n"
     python3 - "${compose_dir}/docker-compose.yml" "${empresa:-amanda}" "${senha_deploy:-Acertitech13@}" << 'PYEOF'
 import sys, re
 
@@ -1084,15 +1090,7 @@ content = re.sub(r'name:\s*(?:multiflow|amanda)_net', 'name: ${COMPOSE_PROJECT_N
 # 4. Parametrizar volumes externos para ${COMPOSE_PROJECT_NAME:-amanda}_<volume>
 content = re.sub(r'name:\s*(?:multiflow|amanda)_(postgres_data|redis_data|backend_database|backend_public|wuzapi_data)', r'name: ${COMPOSE_PROJECT_NAME:-amanda}_\1', content)
 
-# 5. Substituir APENAS o build do servico wuzapi por imagem oficial pré-compilada
-content = re.sub(
-    r'(^[ ]{2}wuzapi:[ ]*\n)[ ]{4}build:[ ]*\n(?:[ ]{6,}.*\n)*',
-    r'\1    image: asternic/wuzapi:latest\n',
-    content,
-    flags=re.M
-)
-
-# 6. Garantir que api_oficial NAO esteja no docker-compose principal (instalacao separada via menu)
+# 5. Garantir que api_oficial NAO esteja no docker-compose principal (instalacao separada via menu)
 if "api_oficial:" in content:
     content = re.sub(r'\n[ ]{2}#?[^\n]*API OFICIAL[^\n]*\n[ ]{2}api_oficial:\n(?:[ ]{4,}.*\n)*', '\n', content)
     content = re.sub(r'^[ ]{2}api_oficial:\n(?:[ ]{4,}.*\n)*', '', content, flags=re.M)
@@ -1304,10 +1302,12 @@ atualizar_amanda_docker() {
   printf "${PURPLE} >> Reconstruindo e reiniciando todos os contêineres da AMANDA (${empresa:-amanda})...${WHITE}\n"
   cd "${compose_dir}" || cd "${app_dir}" || return 1
 
-  # Assegurar componente WuzAPI
-  if [ ! -d "${compose_dir}/wuzapi" ]; then
-    git clone --depth 1 https://github.com/asternic/wuzapi.git "${compose_dir}/wuzapi" 2>/dev/null || true
-  fi
+  # Assegurar Dockerfiles para que todas as imagens sejam construídas e tagueadas com o nome da empresa
+  [ -f "${compose_dir}/postgres/Dockerfile" ] || (mkdir -p "${compose_dir}/postgres" && echo "FROM postgres:17" > "${compose_dir}/postgres/Dockerfile")
+  [ -f "${compose_dir}/redis/Dockerfile" ] || (mkdir -p "${compose_dir}/redis" && echo "FROM redis:7.4-alpine" > "${compose_dir}/redis/Dockerfile")
+  [ -f "${compose_dir}/pgbouncer/Dockerfile" ] || (mkdir -p "${compose_dir}/pgbouncer" && echo "FROM edoburu/pgbouncer:1.21.0-p2" > "${compose_dir}/pgbouncer/Dockerfile")
+  [ -f "${compose_dir}/wuzapi/Dockerfile.official" ] || (mkdir -p "${compose_dir}/wuzapi" && echo "FROM asternic/wuzapi:latest" > "${compose_dir}/wuzapi/Dockerfile.official")
+
   if [ -f "${compose_dir}/docker-compose.yml" ]; then
     python3 - "${compose_dir}/docker-compose.yml" "${empresa:-amanda}" << 'PYEOF'
 import sys, re
@@ -1317,12 +1317,6 @@ with open(compose_file, "r", encoding="utf-8") as f:
 if not re.search(r"^name:\s*", content, re.M):
     content = "name: ${COMPOSE_PROJECT_NAME:-amanda}\n" + content
 content = re.sub(r'container_name:\s*(?:multiflow|amanda)_', 'container_name: ${COMPOSE_PROJECT_NAME:-amanda}_', content)
-content = re.sub(
-    r'(^[ ]{2}wuzapi:[ ]*\n)[ ]{4}build:[ ]*\n(?:[ ]{6,}.*\n)*',
-    r'\1    image: asternic/wuzapi:latest\n',
-    content,
-    flags=re.M
-)
 with open(compose_file, "w", encoding="utf-8") as f:
     f.write(content)
 PYEOF
