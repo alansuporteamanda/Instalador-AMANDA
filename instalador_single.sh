@@ -7641,17 +7641,24 @@ EOF
 
     sleep 2
 
+    local email_arg
+    if [ -n "${email_deploy}" ]; then
+      email_arg="-m ${email_deploy}"
+    else
+      email_arg="--register-unsafely-without-email"
+    fi
+
     banner
     printf "${WHITE} >> Emitindo SSL do ${subdominio_backend}...\n"
     echo
     backend_domain=$(echo "${subdominio_backend/https:\/\//}")
-    sudo su - root <<EOF
-    certbot -m ${email_deploy} \
-            --nginx \
-            --agree-tos \
-            -n \
-            -d ${backend_domain}
-EOF
+    backend_domain=$(echo "${backend_domain/http:\/\//}")
+    backend_domain=${backend_domain%%/*}
+    backend_domain=${backend_domain%%:*}
+    if [[ "$backend_domain" == *.* ]]; then
+      sudo certbot ${email_arg} --nginx --agree-tos --redirect -n -d "${backend_domain}" 2>/dev/null || \
+      sudo certbot ${email_arg} --nginx --agree-tos -n -d "${backend_domain}" 2>/dev/null || true
+    fi
 
     sleep 2
 
@@ -7659,13 +7666,13 @@ EOF
     printf "${WHITE} >> Emitindo SSL do ${subdominio_frontend}...\n"
     echo
     frontend_domain=$(echo "${subdominio_frontend/https:\/\//}")
-    sudo su - root <<EOF
-    certbot -m ${email_deploy} \
-            --nginx \
-            --agree-tos \
-            -n \
-            -d ${frontend_domain}
-EOF
+    frontend_domain=$(echo "${frontend_domain/http:\/\//}")
+    frontend_domain=${frontend_domain%%/*}
+    frontend_domain=${frontend_domain%%:*}
+    if [[ "$frontend_domain" == *.* ]]; then
+      sudo certbot ${email_arg} --nginx --agree-tos --redirect -n -d "${frontend_domain}" 2>/dev/null || \
+      sudo certbot ${email_arg} --nginx --agree-tos -n -d "${frontend_domain}" 2>/dev/null || true
+    fi
 
     sleep 2
 
@@ -7674,7 +7681,9 @@ EOF
       printf "${WHITE} >> Configurando Nginx para ${PURPLE}API Oficial${WHITE}...\n"
       echo
       oficial_hostname=$(echo "${subdominio_oficial/https:\/\//}")
+      oficial_hostname=$(echo "${oficial_hostname/http:\/\//}")
       oficial_hostname=${oficial_hostname%%/*}
+      oficial_hostname=${oficial_hostname%%:*}
       sudo su - root <<EOF
 cat > /etc/nginx/sites-available/${empresa}-oficial << 'END'
 server {
@@ -7698,16 +7707,12 @@ EOF
         banner
         printf "${WHITE} >> Emitindo SSL da ${subdominio_oficial}...\n"
         echo
-        sudo su - root <<EOF
-        certbot -m ${email_deploy} \
-                --nginx \
-                --agree-tos \
-                -n \
-                -d ${oficial_hostname} 2>/dev/null || true
-EOF
+        sudo certbot ${email_arg} --nginx --agree-tos --redirect -n -d "${oficial_hostname}" 2>/dev/null || \
+        sudo certbot ${email_arg} --nginx --agree-tos -n -d "${oficial_hostname}" 2>/dev/null || true
       fi
       sleep 2
     fi
+    sudo systemctl reload nginx 2>/dev/null || true
   } || trata_erro "config_nginx_base"
 }
 
