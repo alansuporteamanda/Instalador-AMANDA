@@ -108,67 +108,52 @@ verificar_docker_funcionando() {
   docker compose version >/dev/null 2>&1 || command -v docker-compose >/dev/null 2>&1
 }
 
-liberar_portas_e_servicos_host() {
-  local target_db="${db_port:-5432}"
-  local target_redis="${redis_port:-6379}"
-  local target_pgb="${pgbouncer_port:-6432}"
-
-  printf " >> Verificando portas configuradas (Postgres: %s, Redis: %s, PgBouncer: %s)...\n" "$target_db" "$target_redis" "$target_pgb"
-
-  if [ "$target_db" = "5432" ] && (systemctl is-active --quiet postgresql 2>/dev/null || service postgresql status >/dev/null 2>&1); then
-    printf " >> Desativando postgresql nativo para liberar porta 5432...\n"
-    systemctl stop postgresql 2>/dev/null || service postgresql stop 2>/dev/null || true
-    systemctl disable postgresql 2>/dev/null || true
+testar_porta_tcp_ocupada() {
+  local p="$1"
+  if command -v ss >/dev/null 2>&1; then
+    ss -tlpn 2>/dev/null | grep -qE "[:.]${p}\b" && return 0
+  elif command -v netstat >/dev/null 2>&1; then
+    netstat -tlpn 2>/dev/null | grep -qE "[:.]${p}\b" && return 0
+  elif command -v lsof >/dev/null 2>&1; then
+    lsof -iTCP:"$p" -sTCP:LISTEN >/dev/null 2>&1 && return 0
   fi
+  (echo >/dev/tcp/127.0.0.1/"$p") 2>/dev/null && return 0
+  return 1
+}
 
-  if [ "$target_redis" = "6379" ] && (systemctl is-active --quiet redis-server 2>/dev/null || service redis-server status >/dev/null 2>&1); then
-    printf " >> Desativando redis-server nativo para liberar porta 6379...\n"
-    systemctl stop redis-server 2>/dev/null || service redis-server stop 2>/dev/null || true
-    systemctl disable redis-server 2>/dev/null || true
+proxima_porta_livre() {
+  local p="$1"
+  while testar_porta_tcp_ocupada "$p"; do
+    p=$((p + 1))
+  done
+  printf '%s\n' "$p"
+}
+
+resolver_portas_automaticas() {
+  PORT_DB=$(proxima_porta_livre 5432)
+  PORT_REDIS=$(proxima_porta_livre 6379)
+  PORT_PGBOUNCER=$(proxima_porta_livre 6432)
+
+  export PORT_DB PORT_REDIS PORT_PGBOUNCER
+
+  if [ "$PORT_DB" != "5432" ]; then
+    printf " >> Porta host 5432 em uso. Postgres Docker alocado automaticamente na porta %s (5432 + %s).\n" "$PORT_DB" "$((PORT_DB - 5432))"
   fi
+  if [ "$PORT_REDIS" != "6379" ]; then
+    printf " >> Porta host 6379 em uso. Redis Docker alocado automaticamente na porta %s (6379 + %s).\n" "$PORT_REDIS" "$((PORT_REDIS - 6379))"
+  fi
+  if [ "$PORT_PGBOUNCER" != "6432" ]; then
+    printf " >> Porta host 6432 em uso. PgBouncer Docker alocado automaticamente na porta %s (6432 + %s).\n" "$PORT_PGBOUNCER" "$((PORT_PGBOUNCER - 6432))"
+  fi
+}
 
+limpar_conteineres_conflitantes() {
   local c
   for c in amanda_postgres amanda_redis amanda_pgbouncer amanda_backend amanda_frontend amanda_apioficial amanda_wuzapi amanda_campaign_dispatcher amanda_transcricao; do
     if docker ps -a --format '{{.Names}}' | grep -qw "$c"; then
       docker rm -f "$c" >/dev/null 2>&1 || true
     fi
   done
-
-  testar_porta_tcp_ocupada() {
-    local p="$1"
-    if command -v ss >/dev/null 2>&1; then
-      ss -tlpn 2>/dev/null | grep -qE "[:.]${p}\b" && return 0
-    elif command -v netstat >/dev/null 2>&1; then
-      netstat -tlpn 2>/dev/null | grep -qE "[:.]${p}\b" && return 0
-    elif command -v lsof >/dev/null 2>&1; then
-      lsof -iTCP:"$p" -sTCP:LISTEN >/dev/null 2>&1 && return 0
-    fi
-    (echo >/dev/tcp/127.0.0.1/"$p") 2>/dev/null && return 0
-    return 1
-  }
-
-  local p
-  for p in "$target_db" "$target_redis" "$target_pgb"; do
-    if testar_porta_tcp_ocupada "$p"; then
-      fuser -k "${p}/tcp" 2>/dev/null || true
-      sleep 1
-    fi
-  done
-
-  localizador_porta_livre() {
-    local candidata="$1"
-    while testar_porta_tcp_ocupada "$candidata"; do
-      candidata=$((candidata + 1))
-    done
-    printf '%s\n' "$candidata"
-  }
-
-  PORT_DB_RESOLVIDA=$(localizador_porta_livre "$target_db")
-  PORT_REDIS_RESOLVIDA=$(localizador_porta_livre "$target_redis")
-  PORT_PGBOUNCER_RESOLVIDA=$(localizador_porta_livre "$target_pgb")
-  db_port="$PORT_DB_RESOLVIDA"
-  redis_port="$PORT_REDIS_RESOLVIDA"
-  pgbouncer_port="$PORT_PGBOUNCER_RESOLVIDA"
-  export PORT_DB_RESOLVIDA PORT_REDIS_RESOLVIDA PORT_PGBOUNCER_RESOLVIDA db_port redis_port pgbouncer_port
 }
+
 
