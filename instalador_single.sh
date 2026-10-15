@@ -1246,6 +1246,9 @@ PYEOF
     if [ -n "$pg_container" ]; then
       docker exec -e PGPASSWORD="${senha_deploy:-Acertitech13@}" "$pg_container" psql -U "${empresa:-amanda}" -d "${empresa:-amanda}" -c "UPDATE \"Users\" SET email = 'admin@amanda.com.br' WHERE id = 1 AND email != 'admin@amanda.com.br';" 2>/dev/null || true
     fi
+
+    # Reiniciar backend para carregar todas as tabelas e seeds aplicadas
+    docker restart "$be_container" 2>/dev/null || true
   fi
 
   # Executar migrações da API Oficial
