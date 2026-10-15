@@ -128,13 +128,24 @@ testar_porta_tcp_ocupada() {
 
 proxima_porta_livre() {
   local p="$1"
-  while testar_porta_tcp_ocupada "$p"; do
+  while testar_porta_tcp_ocupada "$p" || \
+        [ "$p" = "${backend_port:-}" ] || \
+        [ "$p" = "${frontend_port:-}" ] || \
+        [ "$p" = "${PORT_DB:-}" ] || \
+        [ "$p" = "${PORT_REDIS:-}" ] || \
+        [ "$p" = "${PORT_PGBOUNCER:-}" ] || \
+        [ "$p" = "${PORT_TRANSCRIBER:-}" ] || \
+        [ "$p" = "${PORT_WUZAPI:-}" ] || \
+        [ "$p" = "${PORT_DISPATCHER:-}" ] || \
+        [ "$p" = "${PORT_APIOFICIAL:-}" ]; do
     p=$((p + 1))
   done
   printf '%s\n' "$p"
 }
 
 resolver_portas_automaticas() {
+  local silencioso="${1:-0}"
+  unset PORT_DB PORT_REDIS PORT_PGBOUNCER PORT_TRANSCRIBER PORT_WUZAPI PORT_DISPATCHER PORT_APIOFICIAL
   PORT_DB=$(proxima_porta_livre 5432)
   PORT_REDIS=$(proxima_porta_livre 6379)
   PORT_PGBOUNCER=$(proxima_porta_livre 6432)
@@ -145,26 +156,28 @@ resolver_portas_automaticas() {
 
   export PORT_DB PORT_REDIS PORT_PGBOUNCER PORT_TRANSCRIBER PORT_WUZAPI PORT_DISPATCHER PORT_APIOFICIAL
 
-  if [ "$PORT_DB" != "5432" ]; then
-    printf " >> Porta host 5432 em uso. Postgres Docker alocado automaticamente na porta %s (5432 + %s).\n" "$PORT_DB" "$((PORT_DB - 5432))"
-  fi
-  if [ "$PORT_REDIS" != "6379" ]; then
-    printf " >> Porta host 6379 em uso. Redis Docker alocado automaticamente na porta %s (6379 + %s).\n" "$PORT_REDIS" "$((PORT_REDIS - 6379))"
-  fi
-  if [ "$PORT_PGBOUNCER" != "6432" ]; then
-    printf " >> Porta host 6432 em uso. PgBouncer Docker alocado automaticamente na porta %s (6432 + %s).\n" "$PORT_PGBOUNCER" "$((PORT_PGBOUNCER - 6432))"
-  fi
-  if [ "$PORT_TRANSCRIBER" != "4002" ]; then
-    printf " >> Porta host 4002 em uso. Transcrição Docker alocada automaticamente na porta %s (4002 + %s).\n" "$PORT_TRANSCRIBER" "$((PORT_TRANSCRIBER - 4002))"
-  fi
-  if [ "$PORT_WUZAPI" != "8090" ]; then
-    printf " >> Porta host 8090 em uso. Wuzapi Docker alocado automaticamente na porta %s (8090 + %s).\n" "$PORT_WUZAPI" "$((PORT_WUZAPI - 8090))"
-  fi
-  if [ "$PORT_DISPATCHER" != "8095" ]; then
-    printf " >> Porta host 8095 em uso. Dispatcher Docker alocado automaticamente na porta %s (8095 + %s).\n" "$PORT_DISPATCHER" "$((PORT_DISPATCHER - 8095))"
-  fi
-  if [ "$PORT_APIOFICIAL" != "6000" ]; then
-    printf " >> Porta host 6000 em uso. API Oficial Docker alocada automaticamente na porta %s (6000 + %s).\n" "$PORT_APIOFICIAL" "$((PORT_APIOFICIAL - 6000))"
+  if [ "$silencioso" != "1" ]; then
+    if [ "$PORT_DB" != "5432" ]; then
+      printf " >> Porta host 5432 em uso. Postgres Docker alocado automaticamente na porta %s (5432 + %s).\n" "$PORT_DB" "$((PORT_DB - 5432))"
+    fi
+    if [ "$PORT_REDIS" != "6379" ]; then
+      printf " >> Porta host 6379 em uso. Redis Docker alocado automaticamente na porta %s (6379 + %s).\n" "$PORT_REDIS" "$((PORT_REDIS - 6379))"
+    fi
+    if [ "$PORT_PGBOUNCER" != "6432" ]; then
+      printf " >> Porta host 6432 em uso. PgBouncer Docker alocado automaticamente na porta %s (6432 + %s).\n" "$PORT_PGBOUNCER" "$((PORT_PGBOUNCER - 6432))"
+    fi
+    if [ "$PORT_TRANSCRIBER" != "4002" ]; then
+      printf " >> Porta host 4002 em uso. Transcrição Docker alocada automaticamente na porta %s (4002 + %s).\n" "$PORT_TRANSCRIBER" "$((PORT_TRANSCRIBER - 4002))"
+    fi
+    if [ "$PORT_WUZAPI" != "8090" ]; then
+      printf " >> Porta host 8090 em uso. Wuzapi Docker alocado automaticamente na porta %s (8090 + %s).\n" "$PORT_WUZAPI" "$((PORT_WUZAPI - 8090))"
+    fi
+    if [ "$PORT_DISPATCHER" != "8095" ]; then
+      printf " >> Porta host 8095 em uso. Dispatcher Docker alocado automaticamente na porta %s (8095 + %s).\n" "$PORT_DISPATCHER" "$((PORT_DISPATCHER - 8095))"
+    fi
+    if [ "$PORT_APIOFICIAL" != "6000" ]; then
+      printf " >> Porta host 6000 em uso. API Oficial Docker alocada automaticamente na porta %s (6000 + %s).\n" "$PORT_APIOFICIAL" "$((PORT_APIOFICIAL - 6000))"
+    fi
   fi
 }
 

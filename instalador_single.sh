@@ -846,7 +846,16 @@ testar_porta_tcp_ocupada() {
 
 proxima_porta_livre() {
   local p="$1"
-  while testar_porta_tcp_ocupada "$p"; do
+  while testar_porta_tcp_ocupada "$p" || \
+        [ "$p" = "${backend_port:-}" ] || \
+        [ "$p" = "${frontend_port:-}" ] || \
+        [ "$p" = "${PORT_DB:-}" ] || \
+        [ "$p" = "${PORT_REDIS:-}" ] || \
+        [ "$p" = "${PORT_PGBOUNCER:-}" ] || \
+        [ "$p" = "${PORT_TRANSCRIBER:-}" ] || \
+        [ "$p" = "${PORT_WUZAPI:-}" ] || \
+        [ "$p" = "${PORT_DISPATCHER:-}" ] || \
+        [ "$p" = "${PORT_APIOFICIAL:-}" ]; do
     p=$((p + 1))
   done
   printf '%s\n' "$p"
@@ -892,6 +901,8 @@ limpar_conteineres_conflitantes() {
 }
 
 resolver_portas_automaticas() {
+  local silencioso="${1:-0}"
+  unset PORT_DB PORT_REDIS PORT_PGBOUNCER PORT_TRANSCRIBER PORT_WUZAPI PORT_DISPATCHER PORT_APIOFICIAL
   PORT_DB=$(proxima_porta_livre 5432)
   PORT_REDIS=$(proxima_porta_livre 6379)
   PORT_PGBOUNCER=$(proxima_porta_livre 6432)
@@ -902,26 +913,28 @@ resolver_portas_automaticas() {
 
   export PORT_DB PORT_REDIS PORT_PGBOUNCER PORT_TRANSCRIBER PORT_WUZAPI PORT_DISPATCHER PORT_APIOFICIAL
 
-  if [ "$PORT_DB" != "5432" ]; then
-    printf "${YELLOW} >> Porta host 5432 em uso. Postgres Docker alocado automaticamente na porta ${PORT_DB} (5432 + $((PORT_DB - 5432))).${WHITE}\n"
-  fi
-  if [ "$PORT_REDIS" != "6379" ]; then
-    printf "${YELLOW} >> Porta host 6379 em uso. Redis Docker alocado automaticamente na porta ${PORT_REDIS} (6379 + $((PORT_REDIS - 6379))).${WHITE}\n"
-  fi
-  if [ "$PORT_PGBOUNCER" != "6432" ]; then
-    printf "${YELLOW} >> Porta host 6432 em uso. PgBouncer Docker alocado automaticamente na porta ${PORT_PGBOUNCER} (6432 + $((PORT_PGBOUNCER - 6432))).${WHITE}\n"
-  fi
-  if [ "$PORT_TRANSCRIBER" != "4002" ]; then
-    printf "${YELLOW} >> Porta host 4002 em uso. Transcrição Docker alocada automaticamente na porta ${PORT_TRANSCRIBER} (4002 + $((PORT_TRANSCRIBER - 4002))).${WHITE}\n"
-  fi
-  if [ "$PORT_WUZAPI" != "8090" ]; then
-    printf "${YELLOW} >> Porta host 8090 em uso. Wuzapi Docker alocado automaticamente na porta ${PORT_WUZAPI} (8090 + $((PORT_WUZAPI - 8090))).${WHITE}\n"
-  fi
-  if [ "$PORT_DISPATCHER" != "8095" ]; then
-    printf "${YELLOW} >> Porta host 8095 em uso. Dispatcher Docker alocado automaticamente na porta ${PORT_DISPATCHER} (8095 + $((PORT_DISPATCHER - 8095))).${WHITE}\n"
-  fi
-  if [ "$PORT_APIOFICIAL" != "6000" ]; then
-    printf "${YELLOW} >> Porta host 6000 em uso. API Oficial Docker alocada automaticamente na porta ${PORT_APIOFICIAL} (6000 + $((PORT_APIOFICIAL - 6000))).${WHITE}\n"
+  if [ "$silencioso" != "1" ]; then
+    if [ "$PORT_DB" != "5432" ]; then
+      printf "${YELLOW} >> Porta host 5432 em uso. Postgres Docker alocado automaticamente na porta ${PORT_DB} (5432 + $((PORT_DB - 5432))).${WHITE}\n"
+    fi
+    if [ "$PORT_REDIS" != "6379" ]; then
+      printf "${YELLOW} >> Porta host 6379 em uso. Redis Docker alocado automaticamente na porta ${PORT_REDIS} (6379 + $((PORT_REDIS - 6379))).${WHITE}\n"
+    fi
+    if [ "$PORT_PGBOUNCER" != "6432" ]; then
+      printf "${YELLOW} >> Porta host 6432 em uso. PgBouncer Docker alocado automaticamente na porta ${PORT_PGBOUNCER} (6432 + $((PORT_PGBOUNCER - 6432))).${WHITE}\n"
+    fi
+    if [ "$PORT_TRANSCRIBER" != "4002" ]; then
+      printf "${YELLOW} >> Porta host 4002 em uso. Transcrição Docker alocada automaticamente na porta ${PORT_TRANSCRIBER} (4002 + $((PORT_TRANSCRIBER - 4002))).${WHITE}\n"
+    fi
+    if [ "$PORT_WUZAPI" != "8090" ]; then
+      printf "${YELLOW} >> Porta host 8090 em uso. Wuzapi Docker alocado automaticamente na porta ${PORT_WUZAPI} (8090 + $((PORT_WUZAPI - 8090))).${WHITE}\n"
+    fi
+    if [ "$PORT_DISPATCHER" != "8095" ]; then
+      printf "${YELLOW} >> Porta host 8095 em uso. Dispatcher Docker alocado automaticamente na porta ${PORT_DISPATCHER} (8095 + $((PORT_DISPATCHER - 8095))).${WHITE}\n"
+    fi
+    if [ "$PORT_APIOFICIAL" != "6000" ]; then
+      printf "${YELLOW} >> Porta host 6000 em uso. API Oficial Docker alocada automaticamente na porta ${PORT_APIOFICIAL} (6000 + $((PORT_APIOFICIAL - 6000))).${WHITE}\n"
+    fi
   fi
 }
 
@@ -5223,8 +5236,8 @@ define_portas_base() {
   printf "${WHITE}╚══════════════════════════════════════════════════════════════════════╝${WHITE}\n"
   echo
 
-  # Pré-calcular resolução automática das portas internas
-  resolver_portas_automaticas >/dev/null 2>&1 || true
+  # Pré-calcular resolução automática das portas internas em modo silencioso
+  resolver_portas_automaticas 1 >/dev/null 2>&1 || true
 
   local st_be st_fe st_db st_redis st_pgb st_transc st_wuzapi st_disp st_oficial
   testar_porta_tcp_ocupada 8080 && st_be="${RED}[Em uso - Requer alteração]${WHITE}" || st_be="${GREEN}[Livre - Pronto para uso]${WHITE}"
@@ -5297,6 +5310,9 @@ define_portas_base() {
   use_default_ports=$(echo "${use_default_ports}" | tr '[:upper:]' '[:lower:]')
   echo
 
+  local custom_port_backend=0
+  local custom_port_frontend=0
+
   if [ "${use_default_ports}" = "s" ]; then
     if testar_porta_tcp_ocupada "${default_backend_port}"; then
       backend_port=$(proxima_porta_livre "${default_backend_port}")
@@ -5304,13 +5320,19 @@ define_portas_base() {
     else
       backend_port=${default_backend_port}
     fi
-    if testar_porta_tcp_ocupada "${default_frontend_port}"; then
+    if testar_porta_tcp_ocupada "${default_frontend_port}" || [ "${default_frontend_port}" = "${backend_port}" ]; then
       frontend_port=$(proxima_porta_livre "${default_frontend_port}")
+      while [ "${frontend_port}" = "${backend_port}" ]; do
+        frontend_port=$((frontend_port + 1))
+        frontend_port=$(proxima_porta_livre "${frontend_port}")
+      done
       printf "${YELLOW} >> Porta 3000 em uso na VPS. Frontend alocado na porta livre ${frontend_port} (3000 + $((frontend_port - 3000))).${WHITE}\n"
     else
       frontend_port=${default_frontend_port}
     fi
   else
+    custom_port_backend=1
+    custom_port_frontend=1
     while true; do
       printf "${WHITE} >> Qual porta deseja para o Backend? [padrão: 8080]: ${WHITE}\n"
       echo
@@ -5330,6 +5352,10 @@ define_portas_base() {
       read -p "> " frontend_port
       frontend_port=${frontend_port:-3000}
       echo
+      if [ "${frontend_port}" = "${backend_port}" ]; then
+        printf "${RED} >> A porta ${frontend_port} já foi escolhida para o Backend. Por favor, escolha outra.${WHITE}\n\n"
+        continue
+      fi
       if ! testar_porta_tcp_ocupada "${frontend_port}"; then
         break
       else
@@ -5338,9 +5364,95 @@ define_portas_base() {
     done
   fi
 
-  # Executa a resolução final e exibe os avisos de portas ajustadas caso necessário
-  resolver_portas_automaticas
-  sleep 1
+  export backend_port frontend_port
+
+  # Recalcular resolução automática das portas internas com backend e frontend definidos
+  resolver_portas_automaticas 1 >/dev/null 2>&1 || true
+
+  # ================================================================
+  # RE-EXIBIÇÃO DO STATUS ATUALIZADO DAS PORTAS APÓS DEFINIÇÃO
+  # ================================================================
+  banner
+  printf "${WHITE}╔══════════════════════════════════════════════════════════════════════╗${WHITE}\n"
+  printf "${WHITE}║       ${GREEN}STATUS ATUALIZADO DAS PORTAS APÓS DEFINIÇÃO DO USUÁRIO${WHITE}         ║${WHITE}\n"
+  printf "${WHITE}╚══════════════════════════════════════════════════════════════════════╝${WHITE}\n"
+  echo
+
+  local st_be_final st_fe_final
+  if [ "${custom_port_backend}" = "1" ]; then
+    st_be_final="${GREEN}[Livre - Definida pelo usuário: ${backend_port}]${WHITE}"
+  elif [ "${backend_port}" = "8080" ]; then
+    st_be_final="${GREEN}[Livre - Porta Padrão 8080]${WHITE}"
+  else
+    st_be_final="${YELLOW}[Auto-alocada na porta ${backend_port} (8080 + $((backend_port - 8080)))]${WHITE}"
+  fi
+
+  if [ "${custom_port_frontend}" = "1" ]; then
+    st_fe_final="${GREEN}[Livre - Definida pelo usuário: ${frontend_port}]${WHITE}"
+  elif [ "${frontend_port}" = "3000" ]; then
+    st_fe_final="${GREEN}[Livre - Porta Padrão 3000]${WHITE}"
+  else
+    st_fe_final="${YELLOW}[Auto-alocada na porta ${frontend_port} (3000 + $((frontend_port - 3000)))]${WHITE}"
+  fi
+
+  if [ "$PORT_DB" = "5432" ]; then
+    st_db="${GREEN}[Livre - Porta 5432]${WHITE}"
+  else
+    st_db="${YELLOW}[Em uso -> Alocado automaticamente na porta ${PORT_DB} (5432 + $((PORT_DB - 5432)))]${WHITE}"
+  fi
+
+  if [ "$PORT_REDIS" = "6379" ]; then
+    st_redis="${GREEN}[Livre - Porta 6379]${WHITE}"
+  else
+    st_redis="${YELLOW}[Em uso -> Alocado automaticamente na porta ${PORT_REDIS} (6379 + $((PORT_REDIS - 6379)))]${WHITE}"
+  fi
+
+  if [ "$PORT_PGBOUNCER" = "6432" ]; then
+    st_pgb="${GREEN}[Livre - Porta 6432]${WHITE}"
+  else
+    st_pgb="${YELLOW}[Em uso -> Alocado automaticamente na porta ${PORT_PGBOUNCER} (6432 + $((PORT_PGBOUNCER - 6432)))]${WHITE}"
+  fi
+
+  if [ "$PORT_TRANSCRIBER" = "4002" ]; then
+    st_transc="${GREEN}[Livre - Porta 4002]${WHITE}"
+  else
+    st_transc="${YELLOW}[Em uso -> Alocado automaticamente na porta ${PORT_TRANSCRIBER} (4002 + $((PORT_TRANSCRIBER - 4002)))]${WHITE}"
+  fi
+
+  if [ "$PORT_WUZAPI" = "8090" ]; then
+    st_wuzapi="${GREEN}[Livre - Porta 8090]${WHITE}"
+  else
+    st_wuzapi="${YELLOW}[Em uso -> Alocado automaticamente na porta ${PORT_WUZAPI} (8090 + $((PORT_WUZAPI - 8090)))]${WHITE}"
+  fi
+
+  if [ "$PORT_DISPATCHER" = "8095" ]; then
+    st_disp="${GREEN}[Livre - Porta 8095]${WHITE}"
+  else
+    st_disp="${YELLOW}[Em uso -> Alocado automaticamente na porta ${PORT_DISPATCHER} (8095 + $((PORT_DISPATCHER - 8095)))]${WHITE}"
+  fi
+
+  if [ "$PORT_APIOFICIAL" = "6000" ]; then
+    st_oficial="${GREEN}[Livre - Porta 6000]${WHITE}"
+  else
+    st_oficial="${YELLOW}[Em uso -> Alocado automaticamente na porta ${PORT_APIOFICIAL} (6000 + $((PORT_APIOFICIAL - 6000)))]${WHITE}"
+  fi
+
+  printf "   ${WHITE}● ${CYAN}PORTAS DEFINIDAS E VALIDADAS PARA A INSTALAÇÃO:${WHITE}\n"
+  printf "     1) Backend AMANDA (API):       ${YELLOW}%-6s${WHITE} ---> %b\n" "${backend_port}" "$st_be_final"
+  printf "     2) Frontend AMANDA (Web):      ${YELLOW}%-6s${WHITE} ---> %b\n\n" "${frontend_port}" "$st_fe_final"
+
+  printf "   ${WHITE}● ${CYAN}PORTAS DE SERVIÇOS DOCKER AUXILIARES (100%% LIVRES):${WHITE}\n"
+  printf "     3) PostgreSQL (Database):      ${YELLOW}%-6s${WHITE} ---> %b\n" "${PORT_DB}" "$st_db"
+  printf "     4) Redis (Filas e Cache):      ${YELLOW}%-6s${WHITE} ---> %b\n" "${PORT_REDIS}" "$st_redis"
+  printf "     5) PgBouncer (Pool de Conexão): ${YELLOW}%-6s${WHITE} ---> %b\n" "${PORT_PGBOUNCER}" "$st_pgb"
+  printf "     6) API Transcrição de Áudio:   ${YELLOW}%-6s${WHITE} ---> %b\n" "${PORT_TRANSCRIBER}" "$st_transc"
+  printf "     7) Wuzapi / WhatsApp Go:       ${YELLOW}%-6s${WHITE} ---> %b\n" "${PORT_WUZAPI}" "$st_wuzapi"
+  printf "     8) GoFlow Campaign Dispatcher: ${YELLOW}%-6s${WHITE} ---> %b\n" "${PORT_DISPATCHER}" "$st_disp"
+  printf "     9) API Oficial Meta WhatsApp:  ${YELLOW}%-6s${WHITE} ---> %b\n\n" "${PORT_APIOFICIAL}" "$st_oficial"
+
+  printf "   ${GREEN}✔ ${WHITE}Todas as portas foram verificadas e validadas com sucesso na VPS!${WHITE}\n\n"
+  printf "${WHITE} >> Pressione ${GREEN}[ENTER]${WHITE} para prosseguir para a confirmação dos dados...${WHITE}\n"
+  read -r || true
 }
 
 # Informa os dados de instalação
@@ -5378,8 +5490,8 @@ dados_instalacao_base() {
 
 # Confirma os dados de instalação
 confirma_dados_instalacao_base() {
-  printf " >> Confira abaixo os dados dessa instalação! \n"
-  echo
+  banner
+  printf "${WHITE} >> Confira abaixo os dados dessa instalação! ${WHITE}\n\n"
   dados_instalacao_base
   echo
   printf "${WHITE} >> Os dados estão corretos? ${GREEN}S/${RED}N:${WHITE} \n"
