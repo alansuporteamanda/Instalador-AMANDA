@@ -1332,16 +1332,24 @@ atualizar_amanda_docker() {
   [ "$confirm_upd" != "S" ] && return 0
 
   banner
-  printf "${PURPLE} >> Sincronizando com o repositório oficial (branch main)...${WHITE}\n"
+  printf "${PURPLE} >> Sincronizando com o repositório oficial (branch davi-alteracoes)...${WHITE}\n"
   echo
 
   cd "${app_dir}" || cd "${compose_dir}" || trata_erro "cd para diretorio da instalacao"
-  git fetch origin main --prune 2>/dev/null || true
+  git fetch --all --prune 2>/dev/null || true
   git checkout -f 2>/dev/null || true
   git reset --hard 2>/dev/null || true
   git clean -fd 2>/dev/null || true
-  git checkout -B main origin/main 2>/dev/null || true
-  git reset --hard origin/main
+  if git show-ref --verify --quiet refs/remotes/origin/davi-alteracoes; then
+    git checkout -B davi-alteracoes origin/davi-alteracoes 2>/dev/null || true
+    git reset --hard origin/davi-alteracoes
+  elif git show-ref --verify --quiet refs/remotes/origin/davi-alteraçoes; then
+    git checkout -B davi-alteraçoes origin/davi-alteraçoes 2>/dev/null || true
+    git reset --hard origin/davi-alteraçoes
+  else
+    git checkout -B main origin/main 2>/dev/null || true
+    git reset --hard origin/main
+  fi
   git clean -fd 2>/dev/null || true
 
   banner
@@ -6952,13 +6960,16 @@ git checkout -f 2>/dev/null || true
 git reset --hard 2>/dev/null || true
 git clean -fd 2>/dev/null || true
 
-# Tentar fazer checkout e reset para a branch limpa
-if git show-ref --verify --quiet refs/remotes/origin/main; then
-  git checkout -B main origin/main 2>/dev/null || git checkout main 2>/dev/null || true
-  git reset --hard origin/main
+# Tentar fazer checkout e reset para a branch limpa (prioridade: davi-alteracoes > davi-alteraçoes > main > master)
+if git show-ref --verify --quiet refs/remotes/origin/davi-alteracoes; then
+  git checkout -B davi-alteracoes origin/davi-alteracoes 2>/dev/null || true
+  git reset --hard origin/davi-alteracoes
 elif git show-ref --verify --quiet refs/remotes/origin/davi-alteraçoes; then
   git checkout -B davi-alteraçoes origin/davi-alteraçoes 2>/dev/null || true
   git reset --hard origin/davi-alteraçoes
+elif git show-ref --verify --quiet refs/remotes/origin/main; then
+  git checkout -B main origin/main 2>/dev/null || git checkout main 2>/dev/null || true
+  git reset --hard origin/main
 elif git show-ref --verify --quiet refs/remotes/origin/master; then
   git checkout -B master origin/master 2>/dev/null || git checkout master 2>/dev/null || true
   git reset --hard origin/master
