@@ -1222,8 +1222,10 @@ PYEOF
 
   # Criar banco da API Oficial no PostgreSQL se não existir
   if [ -n "$pg_container" ]; then
-    docker exec "$pg_container" psql -U "${empresa:-amanda}" -d postgres -tc "SELECT 1 FROM pg_database WHERE datname = 'api_oficial'" | grep -q 1 || \
-      docker exec "$pg_container" psql -U "${empresa:-amanda}" -d postgres -c "CREATE DATABASE api_oficial;" 2>/dev/null || true
+    printf "${PURPLE} >> Verificando e garantindo existência do banco api_oficial...${WHITE}\n"
+    docker exec -e PGPASSWORD="${senha_deploy:-Acertitech13@}" "$pg_container" psql -U "${empresa:-amanda}" -d "${empresa:-amanda}" -tc "SELECT 1 FROM pg_database WHERE datname = 'api_oficial'" 2>/dev/null | grep -q 1 || \
+      docker exec -e PGPASSWORD="${senha_deploy:-Acertitech13@}" "$pg_container" psql -U "${empresa:-amanda}" -d "${empresa:-amanda}" -c "CREATE DATABASE api_oficial;" 2>/dev/null || \
+      docker exec -e PGPASSWORD="${senha_deploy:-Acertitech13@}" "$pg_container" psql -U "${empresa:-amanda}" -d postgres -c "CREATE DATABASE api_oficial;" 2>/dev/null || true
   fi
 
   # Executar migrações e seeds do Backend
@@ -1242,7 +1244,7 @@ PYEOF
 
     # Sincronizar credenciais oficiais AMANDA no banco de dados
     if [ -n "$pg_container" ]; then
-      docker exec "$pg_container" psql -U "${empresa:-amanda}" -d "${empresa:-amanda}" -c "UPDATE \"Users\" SET email = 'admin@amanda.com.br' WHERE id = 1 AND email != 'admin@amanda.com.br';" 2>/dev/null || true
+      docker exec -e PGPASSWORD="${senha_deploy:-Acertitech13@}" "$pg_container" psql -U "${empresa:-amanda}" -d "${empresa:-amanda}" -c "UPDATE \"Users\" SET email = 'admin@amanda.com.br' WHERE id = 1 AND email != 'admin@amanda.com.br';" 2>/dev/null || true
     fi
   fi
 
