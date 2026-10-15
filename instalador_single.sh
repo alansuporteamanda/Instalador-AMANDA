@@ -4255,16 +4255,35 @@ selecionar_plataforma_desinstalacao() {
     done
   fi
 
-  # Se nenhuma plataforma encontrada, sugerir amanda
-  if [ ${#plataformas[@]} -eq 0 ]; then
-    plataformas+=("amanda")
-  fi
-
   banner
   printf "${WHITE}╔══════════════════════════════════════════════════════════════════════╗${WHITE}\n"
   printf "${WHITE}║        ${PURPLE}SELECIONE QUAL PLATAFORMA DOCKER DESEJA DESINSTALAR${WHITE}           ║${WHITE}\n"
   printf "${WHITE}╚══════════════════════════════════════════════════════════════════════╝${WHITE}\n"
   echo
+
+  if [ ${#plataformas[@]} -eq 0 ]; then
+    printf "   ${GREEN}✔ ${WHITE}Nenhuma plataforma Docker instalada detectada no servidor!${WHITE}\n\n"
+    printf "   [${BLUE}M${WHITE}] Informar manualmente outro nome de plataforma (para limpar resíduos)\n"
+    printf "   [${BLUE}0${WHITE}] Cancelar e Voltar ao Menu\n\n"
+    printf "${WHITE}   Escolha uma opção: ${PURPLE}"
+    read -r op_plat
+    case "$op_plat" in
+      M|m)
+        printf "\n${WHITE} >> Digite o nome exato da plataforma que deseja desinstalar: ${PURPLE}"
+        read -r plataforma_escolhida
+        plataforma_escolhida=$(echo "$plataforma_escolhida" | tr -d '[:space:]')
+        [ -z "$plataforma_escolhida" ] && return 1
+        echo
+        printf "${GREEN} >> Plataforma informada para desinstalação: ${YELLOW}%s${WHITE}\n" "$plataforma_escolhida"
+        sleep 1
+        return 0
+        ;;
+      *)
+        return 1
+        ;;
+    esac
+  fi
+
   printf "   ${WHITE}Plataformas Docker detectadas no servidor:${WHITE}\n\n"
 
   local idx=1
@@ -4402,7 +4421,13 @@ desinstalar_amanda_preservando_dados() {
         case "$b_item" in
           .*|backup*|lost+found|personalizacoes) continue ;;
         esac
-        if [ "$b_item" != "${empresa_alvo}" ]; then
+        [ "$b_item" = "${empresa_alvo}" ] && continue
+        if [ -f "${item}/docker-compose.yml" ] || \
+           [ -f "${item}/amanda/docker-compose.yml" ] || \
+           [ -f "${item}/.env" ] || \
+           [ -f "${item}/amanda/.env" ] || \
+           [ -d "${item}/backend" ] || \
+           [ -d "${item}/amanda" ]; then
           outras_plataformas=1
           break
         fi
@@ -4560,7 +4585,13 @@ desinstalar_amanda_apagando_dados() {
         case "$b_item" in
           .*|backup*|lost+found|personalizacoes) continue ;;
         esac
-        if [ "$b_item" != "${empresa_alvo}" ]; then
+        [ "$b_item" = "${empresa_alvo}" ] && continue
+        if [ -f "${item}/docker-compose.yml" ] || \
+           [ -f "${item}/amanda/docker-compose.yml" ] || \
+           [ -f "${item}/.env" ] || \
+           [ -f "${item}/amanda/.env" ] || \
+           [ -d "${item}/backend" ] || \
+           [ -d "${item}/amanda" ]; then
           outras_plataformas=1
           break
         fi
