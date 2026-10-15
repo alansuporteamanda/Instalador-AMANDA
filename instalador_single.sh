@@ -4249,15 +4249,23 @@ selecionar_plataforma_desinstalacao() {
   local plataformas=()
   local p_dir nome
 
-  # 1. Buscar diretórios em /home/deploy
+  # 1. Buscar diretórios em /home/deploy que sejam plataformas reais do AMANDA
   if [ -d "/home/deploy" ]; then
     for p_dir in /home/deploy/*; do
       if [ -d "$p_dir" ]; then
         nome=$(basename "$p_dir")
         case "$nome" in
-          .*|backup*|lost+found) continue ;;
+          .*|backup*|lost+found|deploy|personalizacoes|redis*) continue ;;
         esac
-        plataformas+=("$nome")
+        # Validar se é de fato uma plataforma AMANDA com compose ou código
+        if [ -f "${p_dir}/docker-compose.yml" ] || \
+           [ -f "${p_dir}/amanda/docker-compose.yml" ] || \
+           [ -f "${p_dir}/.env" ] || \
+           [ -f "${p_dir}/amanda/.env" ] || \
+           [ -d "${p_dir}/backend" ] || \
+           [ -d "${p_dir}/amanda" ]; then
+          plataformas+=("$nome")
+        fi
       fi
     done
   fi
@@ -4267,6 +4275,9 @@ selecionar_plataforma_desinstalacao() {
     local c_nomes
     c_nomes=$(docker ps -a --format '{{.Names}}' 2>/dev/null | grep -E '_(backend|frontend|postgres|redis)' | sed -E 's/_.*//' | sort -u)
     for nome in $c_nomes; do
+      case "$nome" in
+        .*|backup*|lost+found|deploy|personalizacoes|redis*) continue ;;
+      esac
       local ja_existe=0
       for p in "${plataformas[@]}"; do
         [ "$p" = "$nome" ] && ja_existe=1 && break
@@ -4756,7 +4767,7 @@ detectar_instancias_instaladas() {
         local bname
         bname=$(basename "$d")
         case "$bname" in
-          deploy|backup*|lost+found) continue ;;
+          deploy|backup*|lost+found|personalizacoes|redis*) continue ;;
         esac
         local ja_tem=0
         for n in "${nomes_empresas[@]}"; do
