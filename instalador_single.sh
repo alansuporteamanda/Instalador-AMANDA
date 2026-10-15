@@ -578,7 +578,7 @@ atualizar_todas_urls_em_lote() {
     [ -n "$p_env" ] && proj_name="$p_env"
   fi
   docker compose -p "$proj_name" up -d --build frontend
-  docker compose -p "$proj_name" up -d backend api_oficial goflow_dispatcher
+  docker compose -p "$proj_name" up -d backend goflow_dispatcher
 
   printf "\n${GREEN} >> Todas as URLs foram atualizadas e os contêineres reiniciados com sucesso!${WHITE}\n\n"
   printf "${WHITE}>> Pressione Enter para continuar...${WHITE}\n"
@@ -996,10 +996,9 @@ EMPRESA=${empresa:-amanda}
 NODE_ENV=production
 BACKEND_URL=${subdominio_backend}
 FRONTEND_URL=${subdominio_frontend}
-URL_API_OFICIAL=${subdominio_oficial}
+URL_API_OFICIAL=
 PORT_BACKEND=${backend_port:-8080}
 PORT_FRONTEND=${frontend_port:-3000}
-PORT_APIOFICIAL=${PORT_APIOFICIAL:-6000}
 PORT_DB=${PORT_DB:-5432}
 PORT_PGBOUNCER=${PORT_PGBOUNCER:-6432}
 PORT_REDIS=${PORT_REDIS:-6379}
@@ -1020,7 +1019,7 @@ WUZAPI_ADMIN_TOKEN=adminpro123
 WUZAPI_GLOBAL_ENCRYPTION_KEY=mF9vK2xQ8zP4wR6tY1uI3oA5sD7fG0hJ
 WUZAPI_GLOBAL_HMAC_KEY=kH3jL5mN7pQ9rT1vX3zB5dF7gJ9lO1qS
 
-USE_WHATSAPP_OFICIAL=true
+USE_WHATSAPP_OFICIAL=false
 TOKEN_API_OFICIAL="adminpro"
 USE_GO_CAMPAIGN_DISPATCHER=true
 TRANSCRIBE_URL=http://api_transcricao:4002
@@ -1093,43 +1092,10 @@ content = re.sub(
     flags=re.M
 )
 
-# 6. Integrar api_oficial se nao estiver presente
-if "api_oficial:" not in content and re.search(r'\nvolumes:\s*\n', content):
-    api_oficial_block = f"""
-  # ==========================================================
-  # 8. MICROSSERVIÇO: API OFICIAL (Meta WhatsApp Cloud API)
-  # ==========================================================
-  api_oficial:
-    build:
-      context: ./api_oficial
-      dockerfile: Dockerfile
-    container_name: ${{COMPOSE_PROJECT_NAME:-amanda}}_apioficial
-    restart: always
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    environment:
-      PORT: 6000
-      DATABASE_LINK: postgresql://{db_user}:{db_pass}@postgres:5432/api_oficial?schema=public
-      NAME_ADMIN: SetupAutomatizado
-      EMAIL_ADMIN: admin@amanda.com.br
-      PASSWORD_ADMIN: {db_pass}
-      JWT_SECRET: ${{JWT_SECRET:-kZaOTd+YZpjRUyyuQUpigJaEMk4vcW4YOymKPZX0Ts8=}}
-      URL_BACKEND_MULT100: http://backend:8080
-      REDIS_URI: redis://redis:6379
-      TOKEN_ADMIN: adminpro
-      RABBITMQ_ENABLED_GLOBAL: "false"
-      TZ: America/Sao_Paulo
-    ports:
-      - "${{PORT_APIOFICIAL:-6000}}:6000"
-    networks:
-      - amanda_net
-
-volumes:
-"""
-    content = re.sub(r'\nvolumes:\s*\n', api_oficial_block, content, count=1)
+# 6. Garantir que api_oficial NAO esteja no docker-compose principal (instalacao separada via menu)
+if "api_oficial:" in content:
+    content = re.sub(r'\n[ ]{2}#?[^\n]*API OFICIAL[^\n]*\n[ ]{2}api_oficial:\n(?:[ ]{4,}.*\n)*', '\n', content)
+    content = re.sub(r'^[ ]{2}api_oficial:\n(?:[ ]{4,}.*\n)*', '', content, flags=re.M)
 
 with open(compose_file, "w", encoding="utf-8") as f:
     f.write(content)
@@ -1220,14 +1186,6 @@ PYEOF
     [ -z "$pg_container" ] && pg_container=$(docker ps --format '{{.Names}}' | grep -E "^${proj_name}_postgres" | head -n 1)
   done
 
-  # Criar banco da API Oficial no PostgreSQL se não existir
-  if [ -n "$pg_container" ]; then
-    printf "${PURPLE} >> Verificando e garantindo existência do banco api_oficial...${WHITE}\n"
-    docker exec -e PGPASSWORD="${senha_deploy:-Acertitech13@}" "$pg_container" psql -U "${empresa:-amanda}" -d "${empresa:-amanda}" -tc "SELECT 1 FROM pg_database WHERE datname = 'api_oficial'" 2>/dev/null | grep -q 1 || \
-      docker exec -e PGPASSWORD="${senha_deploy:-Acertitech13@}" "$pg_container" psql -U "${empresa:-amanda}" -d "${empresa:-amanda}" -c "CREATE DATABASE api_oficial;" 2>/dev/null || \
-      docker exec -e PGPASSWORD="${senha_deploy:-Acertitech13@}" "$pg_container" psql -U "${empresa:-amanda}" -d postgres -c "CREATE DATABASE api_oficial;" 2>/dev/null || true
-  fi
-
   # Executar migrações e seeds do Backend
   if [ -n "$be_container" ]; then
     banner
@@ -1249,16 +1207,6 @@ PYEOF
 
     # Reiniciar backend para carregar todas as tabelas e seeds aplicadas
     docker restart "$be_container" 2>/dev/null || true
-  fi
-
-  # Executar migrações da API Oficial
-  if [ -n "$oficial_container" ]; then
-    banner
-    printf "${WHITE} >> Executando migrações da API Oficial (Prisma)...\n"
-    echo
-    docker exec "$oficial_container" npx prisma migrate deploy 2>/dev/null || docker exec "$oficial_container" npx prisma db push 2>/dev/null || true
-    sleep 2
-    docker restart "$oficial_container" 2>/dev/null || true
   fi
 
   # Verificar se há contêineres rodando para este projeto
@@ -3997,6 +3945,8 @@ menu_ferramentas() {
     printf "   [${BLUE}25${WHITE}] Atualizar MultiFlow-VOZ\n"
     printf "   [${BLUE}26${WHITE}] Instalar HUB MultiFlow\n"
     printf "   [${BLUE}27${WHITE}] Atualizar HUB MultiFlow\n"
+    printf "   [${BLUE}31${WHITE}] Instalar API Oficial (WhatsApp Meta Cloud)\n"
+    printf "   [${BLUE}32${WHITE}] Atualizar API Oficial\n"
     echo
     printf "  ${BLUE}━━ Versão da aplicação ━━${WHITE}\n"
     printf "   [${BLUE}4${WHITE}] Roolback Versão\n"
@@ -4099,6 +4049,12 @@ menu_ferramentas() {
       ;;
     30)
       atualizar_ultrawhats
+      ;;
+    31)
+      instalar_api_oficial
+      ;;
+    32)
+      atualizar_api_oficial
       ;;
     6)
       SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -5153,7 +5109,7 @@ questoes_dns_base() {
     local host_escolhido="${ip_atual:-localhost}"
     subdominio_backend="http://${host_escolhido}:8080"
     subdominio_frontend="http://${host_escolhido}:3000"
-    subdominio_oficial="http://${host_escolhido}:6000"
+    subdominio_oficial=""
     proxy="none"
     printf "${GREEN} >> Campo em branco. Alternando para modo Sem Domínio (${host_escolhido}).${WHITE}\n"
     sleep 2
@@ -5166,18 +5122,7 @@ questoes_dns_base() {
   echo
   read -p "> " subdominio_frontend
   echo
-
-  # ARMAZENA URL API OFICIAL
-  banner
-  local sugestao_oficial=""
-  local base_domain
-  base_domain=$(echo "$subdominio_backend" | sed -E 's|^[^.]+\.||')
-  [ -n "$base_domain" ] && sugestao_oficial="oficial.${base_domain}"
-  printf "${WHITE} >> Insira o domínio/URL da ${PURPLE}API Oficial${WHITE} (WhatsApp Meta Cloud) [Padrão: ${sugestao_oficial:-oficial.seudominio.com.br}]: \n"
-  echo
-  read -p "> " subdominio_oficial
-  subdominio_oficial="${subdominio_oficial:-$sugestao_oficial}"
-  echo
+  subdominio_oficial=""
 }
 
 # Valida se os domínios ou subdomínios estão acessíveis e apontados
@@ -5434,12 +5379,6 @@ define_portas_base() {
     st_disp="${YELLOW}[Em uso -> Alterado automaticamente para ${PORT_DISPATCHER}]${WHITE}"
   fi
 
-  if [ "$PORT_APIOFICIAL" = "6000" ]; then
-    st_oficial="${GREEN}[Livre - Porta 6000]${WHITE}"
-  else
-    st_oficial="${YELLOW}[Em uso -> Alterado automaticamente para ${PORT_APIOFICIAL}]${WHITE}"
-  fi
-
   printf "   ${WHITE}● ${CYAN}PORTAS EDITÁVEIS PELO USUÁRIO:${WHITE}\n"
   printf "     1) Backend AMANDA (API):       ${YELLOW}8080${WHITE}  ---> %b\n" "$st_be"
   printf "     2) Frontend AMANDA (Web):      ${YELLOW}3000${WHITE}  ---> %b\n\n" "$st_fe"
@@ -5450,8 +5389,7 @@ define_portas_base() {
   printf "     5) PgBouncer (Pool de Conexão): ${YELLOW}6432${WHITE}  ---> %b\n" "$st_pgb"
   printf "     6) API Transcrição de Áudio:   ${YELLOW}4002${WHITE}  ---> %b\n" "$st_transc"
   printf "     7) Wuzapi / WhatsApp Go:       ${YELLOW}8090${WHITE}  ---> %b\n" "$st_wuzapi"
-  printf "     8) GoFlow Campaign Dispatcher: ${YELLOW}8095${WHITE}  ---> %b\n" "$st_disp"
-  printf "     9) API Oficial Meta WhatsApp:  ${YELLOW}6000${WHITE}  ---> %b\n\n" "$st_oficial"
+  printf "     8) GoFlow Campaign Dispatcher: ${YELLOW}8095${WHITE}  ---> %b\n\n" "$st_disp"
   printf "   ${WHITE}ℹ️  ${YELLOW}Nota: PostgreSQL, Redis e PgBouncer serão alterados automaticamente caso em uso.${WHITE}\n"
   printf "   ${WHITE}ℹ️  ${YELLOW}As únicas portas personalizáveis nesta etapa são as do Frontend e Backend.${WHITE}\n\n"
 
@@ -5586,12 +5524,6 @@ define_portas_base() {
     st_disp="${YELLOW}[Em uso -> Alocado automaticamente na porta ${PORT_DISPATCHER} (8095 + $((PORT_DISPATCHER - 8095)))]${WHITE}"
   fi
 
-  if [ "$PORT_APIOFICIAL" = "6000" ]; then
-    st_oficial="${GREEN}[Livre - Porta 6000]${WHITE}"
-  else
-    st_oficial="${YELLOW}[Em uso -> Alocado automaticamente na porta ${PORT_APIOFICIAL} (6000 + $((PORT_APIOFICIAL - 6000)))]${WHITE}"
-  fi
-
   printf "   ${WHITE}● ${CYAN}PORTAS DEFINIDAS E VALIDADAS PARA A INSTALAÇÃO:${WHITE}\n"
   printf "     1) Backend AMANDA (API):       ${YELLOW}%-6s${WHITE} ---> %b\n" "${backend_port}" "$st_be_final"
   printf "     2) Frontend AMANDA (Web):      ${YELLOW}%-6s${WHITE} ---> %b\n\n" "${frontend_port}" "$st_fe_final"
@@ -5602,8 +5534,7 @@ define_portas_base() {
   printf "     5) PgBouncer (Pool de Conexão): ${YELLOW}%-6s${WHITE} ---> %b\n" "${PORT_PGBOUNCER}" "$st_pgb"
   printf "     6) API Transcrição de Áudio:   ${YELLOW}%-6s${WHITE} ---> %b\n" "${PORT_TRANSCRIBER}" "$st_transc"
   printf "     7) Wuzapi / WhatsApp Go:       ${YELLOW}%-6s${WHITE} ---> %b\n" "${PORT_WUZAPI}" "$st_wuzapi"
-  printf "     8) GoFlow Campaign Dispatcher: ${YELLOW}%-6s${WHITE} ---> %b\n" "${PORT_DISPATCHER}" "$st_disp"
-  printf "     9) API Oficial Meta WhatsApp:  ${YELLOW}%-6s${WHITE} ---> %b\n\n" "${PORT_APIOFICIAL}" "$st_oficial"
+  printf "     8) GoFlow Campaign Dispatcher: ${YELLOW}%-6s${WHITE} ---> %b\n\n" "${PORT_DISPATCHER}" "$st_disp"
 
   printf "   ${GREEN}✔ ${WHITE}Todas as portas foram verificadas e validadas com sucesso na VPS!${WHITE}\n\n"
   printf "${WHITE} >> Pressione ${GREEN}[ENTER]${WHITE} para prosseguir para a confirmação dos dados...${WHITE}\n"
@@ -5615,7 +5546,6 @@ dados_instalacao_base() {
   printf "   ${WHITE}Anote os dados abaixo\n\n"
   printf "   ${WHITE}Subdominio Backend: ---->> ${YELLOW}${subdominio_backend}\n"
   printf "   ${WHITE}Subdominiio Frontend: -->> ${YELLOW}${subdominio_frontend}\n"
-  printf "   ${WHITE}Subdominio API Oficial: ->> ${YELLOW}${subdominio_oficial}\n"
   printf "   ${WHITE}Seu Email: ------------->> ${YELLOW}${email_deploy}\n"
   printf "   ${WHITE}Nome da Empresa: ------->> ${YELLOW}${empresa}\n"
   printf "   ${WHITE}Senha Deploy: ---------->> ${YELLOW}${senha_deploy}\n"
@@ -5636,7 +5566,6 @@ dados_instalacao_base() {
   printf "   ${WHITE}Porta Transcrição: ----->> ${YELLOW}${PORT_TRANSCRIBER:-4002}\n"
   printf "   ${WHITE}Porta Wuzapi: ---------->> ${YELLOW}${PORT_WUZAPI:-8090}\n"
   printf "   ${WHITE}Porta GoFlow Dispatch: ->> ${YELLOW}${PORT_DISPATCHER:-8095}\n"
-  printf "   ${WHITE}Porta API Oficial: ----->> ${YELLOW}${PORT_APIOFICIAL:-6000}\n"
   if [ -n "${versao_instalacao}" ]; then
     printf "   ${WHITE}Versão Instalada: ------->> ${YELLOW}${versao_instalacao}${WHITE}\n"
     printf "   ${WHITE}Commit Instalado: ------->> ${YELLOW}${commit_instalacao}${WHITE}\n"
