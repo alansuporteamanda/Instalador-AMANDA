@@ -4388,9 +4388,35 @@ desinstalar_amanda_preservando_dados() {
   systemctl reload nginx 2>/dev/null || true
 
   printf "${WHITE} >> 3. Removendo diretório de código da plataforma (${app_dir})...${WHITE}\n"
-  rm -rf "${app_dir}" 2>/dev/null || true
+  sudo rm -rf "${app_dir}" 2>/dev/null || true
+  [ -d "/home/deploy/multiflow" ] && sudo rm -rf "/home/deploy/multiflow" 2>/dev/null || true
+  sudo rm -rf "/home/deploy/personalizacoes/${empresa_alvo}" 2>/dev/null || true
   rm -f "${INSTALADOR_DIR}/ETAPA_INSTALACAO_${empresa_alvo}" 2>/dev/null || true
   [ "${empresa_alvo}" = "amanda" ] && rm -f "${INSTALADOR_DIR}/ETAPA_INSTALACAO" 2>/dev/null || true
+
+  local outras_plataformas=0
+  if [ -d "/home/deploy" ]; then
+    for item in /home/deploy/*; do
+      if [ -d "$item" ]; then
+        local b_item
+        b_item=$(basename "$item")
+        case "$b_item" in
+          .*|backup*|lost+found|personalizacoes) continue ;;
+        esac
+        if [ "$b_item" != "${empresa_alvo}" ] && [ "$b_item" != "multiflow" ]; then
+          outras_plataformas=1
+          break
+        fi
+      fi
+    done
+  fi
+
+  if [ $outras_plataformas -eq 0 ]; then
+    printf "${WHITE} >> Nenhuma outra plataforma restante em /home/deploy. Removendo pasta /home/deploy...${WHITE}\n"
+    sudo rm -rf /home/deploy
+  else
+    printf "${GREEN} >> Plataforma ${empresa_alvo} removida de /home/deploy. Demais plataformas preservadas.${WHITE}\n"
+  fi
 
   echo
   printf "${GREEN}══════════════════════════════════════════════════════════════════${WHITE}\n"
@@ -4478,7 +4504,33 @@ desinstalar_amanda_apagando_dados() {
   systemctl reload nginx 2>/dev/null || true
 
   printf "${RED} >> 6. Apagando código-fonte e dados em disco (${app_dir})...${WHITE}\n"
-  rm -rf "${app_dir}" 2>/dev/null || true
+  sudo rm -rf "${app_dir}" 2>/dev/null || true
+  [ -d "/home/deploy/multiflow" ] && sudo rm -rf "/home/deploy/multiflow" 2>/dev/null || true
+  sudo rm -rf "/home/deploy/personalizacoes/${empresa_alvo}" 2>/dev/null || true
+
+  local outras_plataformas=0
+  if [ -d "/home/deploy" ]; then
+    for item in /home/deploy/*; do
+      if [ -d "$item" ]; then
+        local b_item
+        b_item=$(basename "$item")
+        case "$b_item" in
+          .*|backup*|lost+found|personalizacoes) continue ;;
+        esac
+        if [ "$b_item" != "${empresa_alvo}" ] && [ "$b_item" != "multiflow" ]; then
+          outras_plataformas=1
+          break
+        fi
+      fi
+    done
+  fi
+
+  if [ $outras_plataformas -eq 0 ]; then
+    printf "${RED} >> Nenhuma outra plataforma detectada em /home/deploy. Removendo pasta completa /home/deploy...${WHITE}\n"
+    sudo rm -rf /home/deploy
+  else
+    printf "${GREEN} >> Plataforma ${empresa_alvo} removida de /home/deploy. Demais plataformas preservadas.${WHITE}\n"
+  fi
 
   printf "${RED} >> 7. Removendo registros da instância ${empresa_alvo} no instalador...${WHITE}\n"
   rm -f "${INSTALADOR_DIR}/VARIAVEIS_INSTALACAO_INSTANCIA_${empresa_alvo}" 2>/dev/null || true
@@ -5657,6 +5709,9 @@ cria_deploy_base() {
     if ! id -u deploy >/dev/null 2>&1; then
       sudo useradd -m -p $(openssl passwd -1 "${senha_deploy}") -s /bin/bash -G sudo deploy 2>/dev/null || true
     fi
+    sudo mkdir -p /home/deploy
+    sudo chown deploy:deploy /home/deploy 2>/dev/null || true
+    sudo chmod 755 /home/deploy 2>/dev/null || true
     sudo usermod -aG sudo deploy 2>/dev/null || true
     if getent group docker >/dev/null 2>&1; then
       sudo usermod -aG docker deploy 2>/dev/null || true
@@ -7692,8 +7747,8 @@ EOF
       banner
       printf "${WHITE} >> Emitindo SSL do ${subdominio_backend}...\n"
       echo
-      certbot ${email_arg} --nginx --agree-tos --redirect -n -d "${backend_hostname}" 2>/dev/null || \
-      certbot ${email_arg} --nginx --agree-tos -n -d "${backend_hostname}" 2>/dev/null || true
+      sudo certbot ${email_arg} --nginx --agree-tos --redirect -n -d "${backend_hostname}" 2>/dev/null || \
+      sudo certbot ${email_arg} --nginx --agree-tos -n -d "${backend_hostname}" 2>/dev/null || true
     fi
 
     sleep 1
@@ -7702,8 +7757,8 @@ EOF
       banner
       printf "${WHITE} >> Emitindo SSL do ${subdominio_frontend}...\n"
       echo
-      certbot ${email_arg} --nginx --agree-tos --redirect -n -d "${frontend_hostname}" 2>/dev/null || \
-      certbot ${email_arg} --nginx --agree-tos -n -d "${frontend_hostname}" 2>/dev/null || true
+      sudo certbot ${email_arg} --nginx --agree-tos --redirect -n -d "${frontend_hostname}" 2>/dev/null || \
+      sudo certbot ${email_arg} --nginx --agree-tos -n -d "${frontend_hostname}" 2>/dev/null || true
     fi
 
     sleep 1
@@ -7712,12 +7767,12 @@ EOF
       banner
       printf "${WHITE} >> Emitindo SSL da ${subdominio_oficial}...\n"
       echo
-      certbot ${email_arg} --nginx --agree-tos --redirect -n -d "${oficial_hostname}" 2>/dev/null || \
-      certbot ${email_arg} --nginx --agree-tos -n -d "${oficial_hostname}" 2>/dev/null || true
+      sudo certbot ${email_arg} --nginx --agree-tos --redirect -n -d "${oficial_hostname}" 2>/dev/null || \
+      sudo certbot ${email_arg} --nginx --agree-tos -n -d "${oficial_hostname}" 2>/dev/null || true
       sleep 1
     fi
 
-    systemctl reload nginx 2>/dev/null || service nginx reload 2>/dev/null || true
+    sudo systemctl reload nginx 2>/dev/null || service nginx reload 2>/dev/null || true
   } || trata_erro "config_nginx_base"
 }
 
