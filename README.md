@@ -24,7 +24,7 @@ cd /root/instalador && git pull && sudo chmod -R 775 *.sh tools/*.sh && sudo ./i
 
 ### 🧪 Homologação com GHCR e Watchtower
 
-Depois de instalar a plataforma, abra o instalador e selecione a opção **9 - Homologação GHCR / Configurar Watchtower**. Essa opção:
+Depois de instalar a plataforma, abra o instalador, escolha a instância e selecione a opção **10 - Homologação GHCR / Configurar Watchtower**. A opção **9** continua reservada à desinstalação. Essa opção:
 
 - Confirma antes de trocar o código da plataforma para a branch `v1.0131012a`; exige que o repositório esteja sem alterações locais.
 - Solicita o usuário GitHub e um token com permissão `read:packages`. O token é digitado sem aparecer na tela e não é gravado no `.env` nem no repositório.
@@ -36,7 +36,7 @@ Use essa opção somente na VPS de homologação: ela troca a branch ativa da pl
 
 Na opção **2 - Atualizar**, o instalador mantém a branch de homologação quando ela está ativa e atualiza apenas os quatro serviços publicados no GHCR, sem recompilá-los localmente.
 
-Para recuperar uma instalação padrão existente após a publicação de correções na branch `main`, atualize e abra novamente o instalador e escolha **2 - Atualizar**. O instalador reconstruirá os serviços a partir do código atualizado e verificará se `amanda_backend` e `amanda_apioficial` permanecem em execução; em caso de falha, exibirá os logs em vez de informar sucesso. Não remova volumes nem altere o histórico de migrações manualmente.
+Para recuperar uma instalação padrão existente após a publicação de correções na branch `main`, atualize e abra novamente o instalador e escolha **2 - Atualizar**. O instalador reconstruirá os serviços da instância selecionada e verificará se o backend e a API Oficial permanecem em execução; em caso de falha, exibirá os logs em vez de informar sucesso. Não remova volumes nem altere o histórico de migrações manualmente.
 
 ---
 
