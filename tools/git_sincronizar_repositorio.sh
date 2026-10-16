@@ -150,7 +150,11 @@ mf_git_clean_preservando_locais() {
 }
 
 mf_git_detectar_deploy_branch() {
-  if git show-ref --verify --quiet refs/remotes/origin/main; then
+  if git show-ref --verify --quiet refs/remotes/origin/davi-alteracoes; then
+    printf '%s\n' davi-alteracoes
+  elif git show-ref --verify --quiet refs/remotes/origin/davi-alteraçoes; then
+    printf '%s\n' davi-alteraçoes
+  elif git show-ref --verify --quiet refs/remotes/origin/main; then
     printf '%s\n' main
   elif git show-ref --verify --quiet refs/remotes/origin/master; then
     printf '%s\n' master
