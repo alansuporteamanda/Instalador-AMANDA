@@ -1276,13 +1276,13 @@ PYEOF
 # ================================================================
 selecionar_canal_branch_amanda() {
   local motivo="${1:-a atualização}"
-  banner
+  banner 2>/dev/null || true
   printf "   ${PURPLE}╔══════════════════════════════════════════════════════════════╗${WHITE}\n"
   printf "   ${PURPLE}║${WHITE}           SELEÇÃO DE CANAL DE VERSÃO / BRANCH AMANDA         ${PURPLE}║${WHITE}\n"
   printf "   ${PURPLE}╚══════════════════════════════════════════════════════════════╝${WHITE}\n\n"
   printf "   ${WHITE}Escolha qual versão/branch você deseja utilizar para ${motivo}:${WHITE}\n\n"
   printf "   [${BLUE}1${WHITE}] ${GREEN}Versão Estável (main)${WHITE} - Recomendada para Produção / Clientes\n"
-  printf "   [${BLUE}2${WHITE}] ${YELLOW}Versão de Desenvolvimento (davi-alteracoes)${WHITE} - Correções e recursos recentes\n"
+  printf "   [${BLUE}2${WHITE}] ${YELLOW}Versão de Desenvolvimento (davi-alteracoes)${WHITE} - Correções e recursos recentes (GLPI)\n"
   printf "   [${BLUE}3${WHITE}] ${PURPLE}Versão de Desenvolvimento (alan-alteracoes)${WHITE} - Recursos em homologação\n"
   printf "   [${BLUE}4${WHITE}] ${CYAN}Personalizada${WHITE} - Digitar o nome de outra branch específica\n\n"
   printf "   ${WHITE}Digite a opção desejada [1-4] (Padrão: 1): ${PURPLE}"
@@ -1305,6 +1305,15 @@ selecionar_canal_branch_amanda() {
       BRANCH_AMANDA_ESCOLHIDA="main"
       ;;
   esac
+
+  export BRANCH_AMANDA_ESCOLHIDA
+  if [ -n "${ARQUIVO_VARIAVEIS_USADO:-}" ] && [ -f "${ARQUIVO_VARIAVEIS_USADO}" ]; then
+    sed -i '/^BRANCH_AMANDA_ESCOLHIDA=/d' "${ARQUIVO_VARIAVEIS_USADO}"
+    echo "BRANCH_AMANDA_ESCOLHIDA=\"${BRANCH_AMANDA_ESCOLHIDA}\"" >> "${ARQUIVO_VARIAVEIS_USADO}"
+  elif [ -n "${empresa:-}" ] && [ -f "/root/VARIAVEIS_INSTALACAO_INSTANCIA_${empresa}" ]; then
+    sed -i '/^BRANCH_AMANDA_ESCOLHIDA=/d' "/root/VARIAVEIS_INSTALACAO_INSTANCIA_${empresa}"
+    echo "BRANCH_AMANDA_ESCOLHIDA=\"${BRANCH_AMANDA_ESCOLHIDA}\"" >> "/root/VARIAVEIS_INSTALACAO_INSTANCIA_${empresa}"
+  fi
 
   printf "\n   ${GREEN}>> Canal selecionado: ${BLUE}%s${WHITE}\n\n" "${BRANCH_AMANDA_ESCOLHIDA}"
   sleep 1
@@ -6982,10 +6991,10 @@ selecionar_versao_atualizacao() {
   source "${INSTALADOR_DIR}/tools/carregar_versoes_multiflow_pro.sh" 2>/dev/null || true
 
   if ! mf_repo_usa_menu_versoes "${repo_url:-}" "${empresa:-}"; then
-    declare -g versao_atualizacao="Mais_Recente"
+    selecionar_canal_branch_amanda "a atualização"
+    declare -g versao_atualizacao="${BRANCH_AMANDA_ESCOLHIDA:-Mais_Recente}"
     declare -g commit_atualizacao=""
-    printf "${GREEN} >> Atualização padrão: branch principal do repositório.${WHITE}\n"
-    printf "${YELLOW} >> (Menu de versões só para multiflow-pro — repo atual: ${repo_url:-origem desconhecida})${WHITE}\n"
+    printf "${GREEN} >> Canal selecionado para atualização: ${BLUE}%s${WHITE}\n" "${BRANCH_AMANDA_ESCOLHIDA:-davi-alteracoes}"
     echo
     sleep 1
     return 0
@@ -7119,22 +7128,34 @@ git checkout -f 2>/dev/null || true
 git reset --hard 2>/dev/null || true
 
 # Tentar fazer checkout e reset para a branch selecionada (ou com fallback limpo)
-target_br="${BRANCH_AMANDA_ESCOLHIDA:-main}"
+target_br="${BRANCH_AMANDA_ESCOLHIDA:-}"
 if [ -n "${target_br}" ] && git show-ref --verify --quiet "refs/remotes/origin/${target_br}"; then
   git checkout -f -B "${target_br}" "origin/${target_br}"
   git reset --hard "origin/${target_br}"
-elif git show-ref --verify --quiet refs/remotes/origin/main; then
-  git checkout -f -B main origin/main
-  git reset --hard origin/main
-elif git show-ref --verify --quiet refs/remotes/origin/davi-alteracoes; then
-  git checkout -f -B davi-alteracoes origin/davi-alteracoes
-  git reset --hard origin/davi-alteracoes
-elif git show-ref --verify --quiet refs/remotes/origin/master; then
-  git checkout -f -B master origin/master
-  git reset --hard origin/master
-elif git show-ref --verify --quiet refs/remotes/origin/MULTI100-OFICIAL-u21; then
-  git checkout -f -B MULTI100-OFICIAL-u21 origin/MULTI100-OFICIAL-u21
-  git reset --hard origin/MULTI100-OFICIAL-u21
+else
+  _cur_br=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)
+  if [ -n "$_cur_br" ] && [ "$_cur_br" != "HEAD" ] && git show-ref --verify --quiet "refs/remotes/origin/${_cur_br}"; then
+    git checkout -f -B "${_cur_br}" "origin/${_cur_br}"
+    git reset --hard "origin/${_cur_br}"
+  elif git show-ref --verify --quiet refs/remotes/origin/davi-alteracoes; then
+    git checkout -f -B davi-alteracoes origin/davi-alteracoes
+    git reset --hard origin/davi-alteracoes
+  elif git show-ref --verify --quiet refs/remotes/origin/davi-alteraçoes; then
+    git checkout -f -B davi-alteraçoes origin/davi-alteraçoes
+    git reset --hard origin/davi-alteraçoes
+  elif git show-ref --verify --quiet refs/remotes/origin/alan-alteracoes; then
+    git checkout -f -B alan-alteracoes origin/alan-alteracoes
+    git reset --hard origin/alan-alteracoes
+  elif git show-ref --verify --quiet refs/remotes/origin/main; then
+    git checkout -f -B main origin/main
+    git reset --hard origin/main
+  elif git show-ref --verify --quiet refs/remotes/origin/master; then
+    git checkout -f -B master origin/master
+    git reset --hard origin/master
+  elif git show-ref --verify --quiet refs/remotes/origin/MULTI100-OFICIAL-u21; then
+    git checkout -f -B MULTI100-OFICIAL-u21 origin/MULTI100-OFICIAL-u21
+    git reset --hard origin/MULTI100-OFICIAL-u21
+  fi
 fi
 git clean -fdx 2>/dev/null || true
 CHECKOUTRECENT
@@ -8373,12 +8394,22 @@ mf_git_clean_preservando_locais() {
 mf_git_detectar_deploy_branch() {
   if [ -n "${BRANCH_AMANDA_ESCOLHIDA:-}" ] && git show-ref --verify --quiet "refs/remotes/origin/${BRANCH_AMANDA_ESCOLHIDA}"; then
     printf '%s\n' "${BRANCH_AMANDA_ESCOLHIDA}"
-  elif git show-ref --verify --quiet refs/remotes/origin/main; then
-    printf '%s\n' main
-  elif git show-ref --verify --quiet refs/remotes/origin/davi-alteracoes; then
+    return 0
+  fi
+  local _cur_branch
+  _cur_branch=\$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)
+  if [ -n "\$_cur_branch" ] && [ "\$_cur_branch" != "HEAD" ] && git show-ref --verify --quiet "refs/remotes/origin/\${_cur_branch}"; then
+    printf '%s\n' "\$_cur_branch"
+    return 0
+  fi
+  if git show-ref --verify --quiet refs/remotes/origin/davi-alteracoes; then
     printf '%s\n' davi-alteracoes
   elif git show-ref --verify --quiet refs/remotes/origin/davi-alteraçoes; then
     printf '%s\n' davi-alteraçoes
+  elif git show-ref --verify --quiet refs/remotes/origin/alan-alteracoes; then
+    printf '%s\n' alan-alteracoes
+  elif git show-ref --verify --quiet refs/remotes/origin/main; then
+    printf '%s\n' main
   elif git show-ref --verify --quiet refs/remotes/origin/master; then
     printf '%s\n' master
   elif git show-ref --verify --quiet refs/remotes/origin/MULTI100-OFICIAL-u21; then

@@ -393,10 +393,12 @@ selecionar_versao_atualizacao() {
   source "${INSTALADOR_DIR}/tools/carregar_versoes_multiflow_pro.sh" 2>/dev/null || true
 
   if ! mf_repo_usa_menu_versoes "${repo_url:-}" "${empresa:-}"; then
-    declare -g versao_atualizacao="Mais_Recente"
+    if [ -t 0 ]; then
+      selecionar_canal_branch_amanda "a atualização FAST"
+    fi
+    declare -g versao_atualizacao="${BRANCH_AMANDA_ESCOLHIDA:-Mais_Recente}"
     declare -g commit_atualizacao=""
-    printf "${GREEN} >> Atualização padrão: branch principal do repositório.${WHITE}\n"
-    printf "${YELLOW} >> (Menu de versões só para multiflow-pro — repo atual: ${repo_url:-origem desconhecida})${WHITE}\n"
+    printf "${GREEN} >> Canal selecionado para atualização: ${BLUE}%s${WHITE}\n" "${BRANCH_AMANDA_ESCOLHIDA:-davi-alteracoes}"
     echo
     sleep 1
     return 0
@@ -1202,10 +1204,22 @@ mf_git_clean_preservando_locais() {
   git clean -fd -e api_transcricao/run_transcricao.sh -e backend/.env -e frontend/.env 2>/dev/null || true
 }
 mf_git_detectar_deploy_branch() {
+  if [ -n "${BRANCH_AMANDA_ESCOLHIDA:-}" ] && git show-ref --verify --quiet "refs/remotes/origin/${BRANCH_AMANDA_ESCOLHIDA}"; then
+    printf '%s\n' "${BRANCH_AMANDA_ESCOLHIDA}"
+    return 0
+  fi
+  local _cur_branch
+  _cur_branch=\$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)
+  if [ -n "\$_cur_branch" ] && [ "\$_cur_branch" != "HEAD" ] && git show-ref --verify --quiet "refs/remotes/origin/\${_cur_branch}"; then
+    printf '%s\n' "\$_cur_branch"
+    return 0
+  fi
   if git show-ref --verify --quiet refs/remotes/origin/davi-alteracoes; then
     printf '%s\n' davi-alteracoes
   elif git show-ref --verify --quiet refs/remotes/origin/davi-alteraçoes; then
     printf '%s\n' davi-alteraçoes
+  elif git show-ref --verify --quiet refs/remotes/origin/alan-alteracoes; then
+    printf '%s\n' alan-alteracoes
   elif git show-ref --verify --quiet refs/remotes/origin/main; then
     printf '%s\n' main
   elif git show-ref --verify --quiet refs/remotes/origin/master; then
@@ -1470,15 +1484,24 @@ EOF
 # --- Execução automática (modo sistema) ---
 printf "${GREEN} >> Atualizador FAST Sistema — modo automático${WHITE}\n"
 
+# Permite passar branch como 2º parâmetro (ex: ./atualizador_fast_sistema.sh amanda davi-alteracoes)
+if [ -n "${2:-}" ]; then
+  export BRANCH_AMANDA_ESCOLHIDA="${2}"
+fi
+
 if ! sistema_resolver_empresa "${1:-}"; then
   exit 1
 fi
 
 carregar_credenciais_instancia
 
-declare -g versao_atualizacao="Mais_Recente"
+if [ -z "${BRANCH_AMANDA_ESCOLHIDA:-}" ] && [ -t 0 ]; then
+  selecionar_canal_branch_amanda "a atualização FAST"
+fi
+
+declare -g versao_atualizacao="${BRANCH_AMANDA_ESCOLHIDA:-Mais_Recente}"
 declare -g commit_atualizacao=""
-printf "${GREEN} >> Versão: última do Git (branch remota)${WHITE}\n"
+printf "${GREEN} >> Canal de atualização: ${BLUE}%s${WHITE}\n" "${BRANCH_AMANDA_ESCOLHIDA:-automático (davi-alteracoes)}"
 
 if echo "${repo_url:-}" | grep -Eqi 'github\.com' && [ -z "${github_token:-}" ]; then
   printf "${YELLOW} >> Aviso: github_token não definido — Baileys / fetch podem falhar.${WHITE}\n"
