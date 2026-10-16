@@ -1282,21 +1282,22 @@ atualizar_amanda_docker() {
   echo
 
   cd "${app_dir}" || cd "${compose_dir}" || trata_erro "cd para diretorio da instalacao"
+  git config --global --add safe.directory "${app_dir}" 2>/dev/null || true
   git fetch --all --prune 2>/dev/null || true
+  git clean -fdx 2>/dev/null || true
   git checkout -f 2>/dev/null || true
   git reset --hard 2>/dev/null || true
-  git clean -fd 2>/dev/null || true
   if git show-ref --verify --quiet refs/remotes/origin/davi-alteracoes; then
-    git checkout -B davi-alteracoes origin/davi-alteracoes 2>/dev/null || true
+    git checkout -f -B davi-alteracoes origin/davi-alteracoes
     git reset --hard origin/davi-alteracoes
   elif git show-ref --verify --quiet refs/remotes/origin/davi-alteraçoes; then
-    git checkout -B davi-alteraçoes origin/davi-alteraçoes 2>/dev/null || true
+    git checkout -f -B davi-alteraçoes origin/davi-alteraçoes
     git reset --hard origin/davi-alteraçoes
   else
-    git checkout -B main origin/main 2>/dev/null || true
+    git checkout -f -B main origin/main
     git reset --hard origin/main
   fi
-  git clean -fd 2>/dev/null || true
+  git clean -fdx 2>/dev/null || true
 
   banner
   printf "${PURPLE} >> Reconstruindo e reiniciando todos os contêineres da AMANDA (${empresa:-amanda})...${WHITE}\n"
@@ -5144,8 +5145,19 @@ questoes_dns_base() {
     banner
     printf "${GREEN} >> Modo Sem Domínio (IP / Localhost) selecionado.${WHITE}\n\n"
     
+    local is_local_env=0
+    if grep -qiE "microsoft|wsl" /proc/version 2>/dev/null || [ -n "${WSL_DISTRO_NAME:-}" ]; then
+      is_local_env=1
+    elif [ -n "$ip_atual" ] && ! ip -o addr show 2>/dev/null | grep -qF "$ip_atual"; then
+      is_local_env=1
+    fi
+
     local ip_sugerido="${ip_atual}"
-    if [ -z "$ip_sugerido" ] || [ "$ip_sugerido" = "127.0.0.1" ]; then
+    if [ "$is_local_env" = "1" ]; then
+      ip_sugerido="localhost"
+      printf "${YELLOW} >> Detectado ambiente local/WSL ou IP atrás de NAT (${ip_atual}).${WHITE}\n"
+      printf "${YELLOW}    Recomendado usar 'localhost' para testes na própria máquina.${WHITE}\n\n"
+    elif [ -z "$ip_sugerido" ] || [ "$ip_sugerido" = "127.0.0.1" ]; then
       ip_sugerido=$(hostname -I 2>/dev/null | awk '{print $1}')
     fi
     [ -z "$ip_sugerido" ] && ip_sugerido="localhost"
@@ -5180,7 +5192,16 @@ questoes_dns_base() {
 
   if [ -z "$subdominio_backend" ] || [ "$subdominio_backend" = "ip" ] || [ "$subdominio_backend" = "localhost" ]; then
     declare -g INSTALACAO_SEM_DOMINIO="1"
-    local host_escolhido="${ip_atual:-localhost}"
+    local is_local_env=0
+    if grep -qiE "microsoft|wsl" /proc/version 2>/dev/null || [ -n "${WSL_DISTRO_NAME:-}" ]; then
+      is_local_env=1
+    elif [ -n "$ip_atual" ] && ! ip -o addr show 2>/dev/null | grep -qF "$ip_atual"; then
+      is_local_env=1
+    fi
+    local host_escolhido="localhost"
+    if [ "$is_local_env" != "1" ] && [ -n "$ip_atual" ]; then
+      host_escolhido="${ip_atual}"
+    fi
     subdominio_backend="http://${host_escolhido}:8080"
     subdominio_frontend="http://${host_escolhido}:3000"
     subdominio_oficial=""
@@ -7004,7 +7025,7 @@ baixa_codigo_base() {
         rm -rf "${dest_dir}"
       fi
       mkdir -p "${dest_dir}"
-      GIT_TERMINAL_PROMPT=0 git clone "${github_url}" "${dest_dir}"
+      GIT_TERMINAL_PROMPT=0 git clone -b davi-alteracoes "${github_url}" "${dest_dir}" 2>/dev/null || GIT_TERMINAL_PROMPT=0 git clone "${github_url}" "${dest_dir}"
       if [ $? -ne 0 ]; then
         echo
         printf "${RED}══════════════════════════════════════════════════════════════════${WHITE}\n"
@@ -7032,34 +7053,35 @@ baixa_codigo_base() {
       
       cd ${dest_dir} || trata_erro "cd para diretório do projeto"
       
-      # Fazer checkout para a branch principal (prioridade: main > davi-alteraçoes > master)
+      # Fazer checkout para a branch principal (prioridade: davi-alteracoes > davi-alteraçoes > main > master)
       sudo su - deploy <<CHECKOUTRECENT
 cd ${dest_dir}
+git config --global --add safe.directory "${dest_dir}" 2>/dev/null || true
 git fetch --all --prune 2>/dev/null || true
 
 # Limpar qualquer modificação residual anterior
+git clean -fdx 2>/dev/null || true
 git checkout -f 2>/dev/null || true
 git reset --hard 2>/dev/null || true
-git clean -fd 2>/dev/null || true
 
 # Tentar fazer checkout e reset para a branch limpa (prioridade: davi-alteracoes > davi-alteraçoes > main > master)
 if git show-ref --verify --quiet refs/remotes/origin/davi-alteracoes; then
-  git checkout -B davi-alteracoes origin/davi-alteracoes 2>/dev/null || true
+  git checkout -f -B davi-alteracoes origin/davi-alteracoes
   git reset --hard origin/davi-alteracoes
 elif git show-ref --verify --quiet refs/remotes/origin/davi-alteraçoes; then
-  git checkout -B davi-alteraçoes origin/davi-alteraçoes 2>/dev/null || true
+  git checkout -f -B davi-alteraçoes origin/davi-alteraçoes
   git reset --hard origin/davi-alteraçoes
 elif git show-ref --verify --quiet refs/remotes/origin/main; then
-  git checkout -B main origin/main 2>/dev/null || git checkout main 2>/dev/null || true
+  git checkout -f -B main origin/main
   git reset --hard origin/main
 elif git show-ref --verify --quiet refs/remotes/origin/master; then
-  git checkout -B master origin/master 2>/dev/null || git checkout master 2>/dev/null || true
+  git checkout -f -B master origin/master
   git reset --hard origin/master
 elif git show-ref --verify --quiet refs/remotes/origin/MULTI100-OFICIAL-u21; then
-  git checkout -B MULTI100-OFICIAL-u21 origin/MULTI100-OFICIAL-u21 2>/dev/null || true
+  git checkout -f -B MULTI100-OFICIAL-u21 origin/MULTI100-OFICIAL-u21
   git reset --hard origin/MULTI100-OFICIAL-u21
 fi
-git clean -fd 2>/dev/null || true
+git clean -fdx 2>/dev/null || true
 CHECKOUTRECENT
       
       printf "${GREEN} >> Versão mais recente do repositório será instalada${WHITE}\n"
