@@ -1348,7 +1348,7 @@ atualizar_amanda_docker() {
   cd "${app_dir}" || cd "${compose_dir}" || trata_erro "cd para diretorio da instalacao"
   git config --global --add safe.directory "${app_dir}" 2>/dev/null || true
   git fetch --all --prune 2>/dev/null || true
-  git clean -fdx 2>/dev/null || true
+  git clean -fd -e .env -e "*/.env" -e ssl 2>/dev/null || true
   git checkout -f 2>/dev/null || true
   git reset --hard 2>/dev/null || true
 
@@ -1364,7 +1364,55 @@ atualizar_amanda_docker() {
     git checkout -f -B master origin/master
     git reset --hard origin/master
   fi
-  git clean -fdx 2>/dev/null || true
+  git clean -fd -e .env -e "*/.env" -e ssl 2>/dev/null || true
+
+  # Assegurar que o .env do Docker Compose existe (restaura a partir das variáveis salvas se necessário)
+  if [ ! -f "${compose_dir}/.env" ]; then
+    if [ -n "${ARQUIVO_VARIAVEIS_USADO:-}" ] && [ -f "${ARQUIVO_VARIAVEIS_USADO}" ]; then
+      source "${ARQUIVO_VARIAVEIS_USADO}" 2>/dev/null
+    elif [ -f "${INSTALADOR_DIR}/VARIAVEIS_INSTALACAO_INSTANCIA_${empresa:-amanda}" ]; then
+      source "${INSTALADOR_DIR}/VARIAVEIS_INSTALACAO_INSTANCIA_${empresa:-amanda}" 2>/dev/null
+    elif [ -f "/root/VARIAVEIS_INSTALACAO_INSTANCIA_${empresa:-amanda}" ]; then
+      source "/root/VARIAVEIS_INSTALACAO_INSTANCIA_${empresa:-amanda}" 2>/dev/null
+    fi
+    cat <<EOF > "${compose_dir}/.env"
+COMPOSE_PROJECT_NAME=${empresa:-amanda}
+EMPRESA=${empresa:-amanda}
+NODE_ENV=production
+BACKEND_URL=${subdominio_backend}
+FRONTEND_URL=${subdominio_frontend}
+URL_API_OFICIAL=${subdominio_api_oficial:-}
+PORT_BACKEND=${backend_port:-8080}
+PORT_FRONTEND=${frontend_port:-3000}
+PORT_DB=${PORT_DB:-5432}
+PORT_PGBOUNCER=${PORT_PGBOUNCER:-6432}
+PORT_REDIS=${PORT_REDIS:-6379}
+PORT_WUZAPI=${PORT_WUZAPI:-8090}
+PORT_DISPATCHER=${PORT_DISPATCHER:-8095}
+PORT_TRANSCRIBER=${PORT_TRANSCRIBER:-4002}
+
+DB_USER=${empresa:-amanda}
+DB_PASS=${senha_deploy:-Acertitech13@}
+DB_NAME=${empresa:-amanda}
+DB_NAME_APIOFICIAL=api_oficial
+
+JWT_SECRET=${jwt_secret}
+JWT_REFRESH_SECRET=${jwt_refresh_secret}
+MASTER_KEY=${senha_master}
+
+WUZAPI_ADMIN_TOKEN=adminpro123
+WUZAPI_GLOBAL_ENCRYPTION_KEY=mF9vK2xQ8zP4wR6tY1uI3oA5sD7fG0hJ
+WUZAPI_GLOBAL_HMAC_KEY=kH3jL5mN7pQ9rT1vX3zB5dF7gJ9lO1qS
+
+USE_WHATSAPP_OFICIAL=false
+TOKEN_API_OFICIAL="adminpro"
+USE_GO_CAMPAIGN_DISPATCHER=true
+TRANSCRIBE_URL=http://api_transcricao:4002
+EOF
+    [ "${compose_dir}" != "${app_dir}" ] && cp "${compose_dir}/.env" "${app_dir}/.env" 2>/dev/null || true
+    [ -d "${compose_dir}/backend" ] && cp "${compose_dir}/.env" "${compose_dir}/backend/.env" 2>/dev/null || true
+    [ -d "${compose_dir}/frontend" ] && echo "REACT_APP_BACKEND_URL=${subdominio_backend}" > "${compose_dir}/frontend/.env" 2>/dev/null || true
+  fi
 
   banner
   printf "${PURPLE} >> Reconstruindo e reiniciando todos os contêineres da AMANDA (${empresa:-amanda})...${WHITE}\n"
@@ -10837,6 +10885,12 @@ fi
 if [ "${1:-}" = "--desinstalar" ]; then
   carregar_variaveis
   menu_desinstalar_plataforma
+  exit 0
+fi
+
+if [ "${1:-}" = "--atualizar" ] || [ "${1:-}" = "atualizar" ] || [ "${1:-}" = "2" ]; then
+  carregar_variaveis
+  atualizar_amanda_docker
   exit 0
 fi
 
