@@ -578,7 +578,7 @@ atualizar_todas_urls_em_lote() {
     [ -n "$p_env" ] && proj_name="$p_env"
   fi
   docker compose -p "$proj_name" up -d --build frontend
-  docker compose -p "$proj_name" up -d backend api_oficial goflow_dispatcher
+  docker compose -p "$proj_name" up -d backend goflow_dispatcher
 
   printf "\n${GREEN} >> Todas as URLs foram atualizadas e os contêineres reiniciados com sucesso!${WHITE}\n\n"
   printf "${WHITE}>> Pressione Enter para continuar...${WHITE}\n"
@@ -970,6 +970,9 @@ instalar_amanda_docker_stack() {
   limpar_conteineres_conflitantes "/home/deploy/${proj_name}" "${proj_name}"
   resolver_portas_automaticas
 
+  # Selecionar canal/branch da AMANDA (Estável vs Dev)
+  selecionar_canal_branch_amanda "a instalação"
+
   # Instalar Git e baixar o repositório
   instala_git_base || trata_erro "instala_git_base"
   codifica_clone_base || trata_erro "codifica_clone_base"
@@ -996,10 +999,9 @@ EMPRESA=${empresa:-amanda}
 NODE_ENV=production
 BACKEND_URL=${subdominio_backend}
 FRONTEND_URL=${subdominio_frontend}
-URL_API_OFICIAL=${subdominio_oficial}
+URL_API_OFICIAL=
 PORT_BACKEND=${backend_port:-8080}
 PORT_FRONTEND=${frontend_port:-3000}
-PORT_APIOFICIAL=${PORT_APIOFICIAL:-6000}
 PORT_DB=${PORT_DB:-5432}
 PORT_PGBOUNCER=${PORT_PGBOUNCER:-6432}
 PORT_REDIS=${PORT_REDIS:-6379}
@@ -1020,7 +1022,7 @@ WUZAPI_ADMIN_TOKEN=adminpro123
 WUZAPI_GLOBAL_ENCRYPTION_KEY=mF9vK2xQ8zP4wR6tY1uI3oA5sD7fG0hJ
 WUZAPI_GLOBAL_HMAC_KEY=kH3jL5mN7pQ9rT1vX3zB5dF7gJ9lO1qS
 
-USE_WHATSAPP_OFICIAL=true
+USE_WHATSAPP_OFICIAL=false
 TOKEN_API_OFICIAL="adminpro"
 USE_GO_CAMPAIGN_DISPATCHER=true
 TRANSCRIBE_URL=http://api_transcricao:4002
@@ -1057,9 +1059,15 @@ EOF
     fi
   fi
 
-  # Padronizar e otimizar docker-compose.yml com precisão total (100% amanda_, wuzapi oficial e api_oficial integrada)
+  # Assegurar Dockerfiles para que todas as imagens sejam construídas e tagueadas com o nome da empresa
+  [ -f "${compose_dir}/postgres/Dockerfile" ] || (mkdir -p "${compose_dir}/postgres" && echo "FROM postgres:17" > "${compose_dir}/postgres/Dockerfile")
+  [ -f "${compose_dir}/redis/Dockerfile" ] || (mkdir -p "${compose_dir}/redis" && echo "FROM redis:7.4-alpine" > "${compose_dir}/redis/Dockerfile")
+  [ -f "${compose_dir}/pgbouncer/Dockerfile" ] || (mkdir -p "${compose_dir}/pgbouncer" && echo "FROM edoburu/pgbouncer:1.21.0-p2" > "${compose_dir}/pgbouncer/Dockerfile")
+  [ -f "${compose_dir}/wuzapi/Dockerfile.official" ] || (mkdir -p "${compose_dir}/wuzapi" && echo "FROM asternic/wuzapi:latest" > "${compose_dir}/wuzapi/Dockerfile.official")
+
+  # Padronizar e otimizar docker-compose.yml com precisão total (100% amanda_, todas imagens com prefixo da empresa)
   if [ -f "${compose_dir}/docker-compose.yml" ]; then
-    printf "${PURPLE} >> Padronizando docker-compose.yml para AMANDA e integrando microsserviços...${WHITE}\n"
+    printf "${PURPLE} >> Padronizando docker-compose.yml para AMANDA e tagueando todas imagens com a empresa...${WHITE}\n"
     python3 - "${compose_dir}/docker-compose.yml" "${empresa:-amanda}" "${senha_deploy:-Acertitech13@}" << 'PYEOF'
 import sys, re
 
@@ -1085,51 +1093,10 @@ content = re.sub(r'name:\s*(?:multiflow|amanda)_net', 'name: ${COMPOSE_PROJECT_N
 # 4. Parametrizar volumes externos para ${COMPOSE_PROJECT_NAME:-amanda}_<volume>
 content = re.sub(r'name:\s*(?:multiflow|amanda)_(postgres_data|redis_data|backend_database|backend_public|wuzapi_data)', r'name: ${COMPOSE_PROJECT_NAME:-amanda}_\1', content)
 
-# 5. Substituir APENAS o build do servico wuzapi por imagem oficial pré-compilada
-content = re.sub(
-    r'(^[ ]{2}wuzapi:[ ]*\n)[ ]{4}build:[ ]*\n(?:[ ]{6,}.*\n)*',
-    r'\1    image: asternic/wuzapi:latest\n',
-    content,
-    flags=re.M
-)
-
-# 6. Integrar api_oficial se nao estiver presente
-if "api_oficial:" not in content and re.search(r'\nvolumes:\s*\n', content):
-    api_oficial_block = f"""
-  # ==========================================================
-  # 8. MICROSSERVIÇO: API OFICIAL (Meta WhatsApp Cloud API)
-  # ==========================================================
-  api_oficial:
-    build:
-      context: ./api_oficial
-      dockerfile: Dockerfile
-    container_name: ${{COMPOSE_PROJECT_NAME:-amanda}}_apioficial
-    restart: always
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    environment:
-      PORT: 6000
-      DATABASE_LINK: postgresql://{db_user}:{db_pass}@postgres:5432/api_oficial?schema=public
-      NAME_ADMIN: SetupAutomatizado
-      EMAIL_ADMIN: admin@amanda.com.br
-      PASSWORD_ADMIN: {db_pass}
-      JWT_SECRET: ${{JWT_SECRET:-kZaOTd+YZpjRUyyuQUpigJaEMk4vcW4YOymKPZX0Ts8=}}
-      URL_BACKEND_MULT100: http://backend:8080
-      REDIS_URI: redis://redis:6379
-      TOKEN_ADMIN: adminpro
-      RABBITMQ_ENABLED_GLOBAL: "false"
-      TZ: America/Sao_Paulo
-    ports:
-      - "${{PORT_APIOFICIAL:-6000}}:6000"
-    networks:
-      - amanda_net
-
-volumes:
-"""
-    content = re.sub(r'\nvolumes:\s*\n', api_oficial_block, content, count=1)
+# 5. Garantir que api_oficial NAO esteja no docker-compose principal (instalacao separada via menu)
+if "api_oficial:" in content:
+    content = re.sub(r'\n[ ]{2}#?[^\n]*API OFICIAL[^\n]*\n[ ]{2}api_oficial:\n(?:[ ]{4,}.*\n)*', '\n', content)
+    content = re.sub(r'^[ ]{2}api_oficial:\n(?:[ ]{4,}.*\n)*', '', content, flags=re.M)
 
 with open(compose_file, "w", encoding="utf-8") as f:
     f.write(content)
@@ -1176,6 +1143,16 @@ PYEOF
     git checkout -f docker-compose.yml 2>/dev/null || true
   fi
 
+  # Assegurar Dockerfiles auxiliares e tagueamento inicial das imagens com o nome da empresa
+  [ -f "${compose_dir}/postgres/Dockerfile" ] || (mkdir -p "${compose_dir}/postgres" && echo "FROM postgres:17" > "${compose_dir}/postgres/Dockerfile")
+  [ -f "${compose_dir}/redis/Dockerfile" ] || (mkdir -p "${compose_dir}/redis" && echo "FROM redis:7.4-alpine" > "${compose_dir}/redis/Dockerfile")
+  [ -f "${compose_dir}/pgbouncer/Dockerfile" ] || (mkdir -p "${compose_dir}/pgbouncer" && echo "FROM edoburu/pgbouncer:1.21.0-p2" > "${compose_dir}/pgbouncer/Dockerfile")
+  [ -f "${compose_dir}/wuzapi/Dockerfile.official" ] || (mkdir -p "${compose_dir}/wuzapi" && echo "FROM asternic/wuzapi:latest" > "${compose_dir}/wuzapi/Dockerfile.official")
+  docker image inspect postgres:17 >/dev/null 2>&1 && docker tag postgres:17 "${proj_name}_postgres:17" 2>/dev/null || true
+  docker image inspect redis:7.4-alpine >/dev/null 2>&1 && docker tag redis:7.4-alpine "${proj_name}_redis:7.4-alpine" 2>/dev/null || true
+  docker image inspect edoburu/pgbouncer:1.21.0-p2 >/dev/null 2>&1 && docker tag edoburu/pgbouncer:1.21.0-p2 "${proj_name}_pgbouncer:1.21.0-p2" 2>/dev/null || true
+  docker image inspect asternic/wuzapi:latest >/dev/null 2>&1 && docker tag asternic/wuzapi:latest "${proj_name}_wuzapi:latest" 2>/dev/null || true
+
   limpar_conteineres_conflitantes "${compose_dir}" "${proj_name}"
   resolver_portas_automaticas
   sincronizar_todas_portas_env "${compose_dir}/.env"
@@ -1220,14 +1197,6 @@ PYEOF
     [ -z "$pg_container" ] && pg_container=$(docker ps --format '{{.Names}}' | grep -E "^${proj_name}_postgres" | head -n 1)
   done
 
-  # Criar banco da API Oficial no PostgreSQL se não existir
-  if [ -n "$pg_container" ]; then
-    printf "${PURPLE} >> Verificando e garantindo existência do banco api_oficial...${WHITE}\n"
-    docker exec -e PGPASSWORD="${senha_deploy:-Acertitech13@}" "$pg_container" psql -U "${empresa:-amanda}" -d "${empresa:-amanda}" -tc "SELECT 1 FROM pg_database WHERE datname = 'api_oficial'" 2>/dev/null | grep -q 1 || \
-      docker exec -e PGPASSWORD="${senha_deploy:-Acertitech13@}" "$pg_container" psql -U "${empresa:-amanda}" -d "${empresa:-amanda}" -c "CREATE DATABASE api_oficial;" 2>/dev/null || \
-      docker exec -e PGPASSWORD="${senha_deploy:-Acertitech13@}" "$pg_container" psql -U "${empresa:-amanda}" -d postgres -c "CREATE DATABASE api_oficial;" 2>/dev/null || true
-  fi
-
   # Executar migrações e seeds do Backend
   if [ -n "$be_container" ]; then
     banner
@@ -1249,16 +1218,6 @@ PYEOF
 
     # Reiniciar backend para carregar todas as tabelas e seeds aplicadas
     docker restart "$be_container" 2>/dev/null || true
-  fi
-
-  # Executar migrações da API Oficial
-  if [ -n "$oficial_container" ]; then
-    banner
-    printf "${WHITE} >> Executando migrações da API Oficial (Prisma)...\n"
-    echo
-    docker exec "$oficial_container" npx prisma migrate deploy 2>/dev/null || docker exec "$oficial_container" npx prisma db push 2>/dev/null || true
-    sleep 2
-    docker restart "$oficial_container" 2>/dev/null || true
   fi
 
   # Verificar se há contêineres rodando para este projeto
@@ -1355,6 +1314,54 @@ mf_verificar_servicos_criticos_docker() {
 }
 
 # ================================================================
+# SELEÇÃO DE CANAL / BRANCH AMANDA (Estável vs Desenvolvimento)
+# ================================================================
+selecionar_canal_branch_amanda() {
+  local motivo="${1:-a atualização}"
+  banner 2>/dev/null || true
+  printf "   ${PURPLE}╔══════════════════════════════════════════════════════════════╗${WHITE}\n"
+  printf "   ${PURPLE}║${WHITE}           SELEÇÃO DE CANAL DE VERSÃO / BRANCH AMANDA         ${PURPLE}║${WHITE}\n"
+  printf "   ${PURPLE}╚══════════════════════════════════════════════════════════════╝${WHITE}\n\n"
+  printf "   ${WHITE}Escolha qual versão/branch você deseja utilizar para ${motivo}:${WHITE}\n\n"
+  printf "   [${BLUE}1${WHITE}] ${GREEN}Versão Estável (main)${WHITE} - Recomendada para Produção / Clientes\n"
+  printf "   [${BLUE}2${WHITE}] ${YELLOW}Versão de Desenvolvimento (davi-alteracoes)${WHITE} - Correções e recursos recentes (GLPI)\n"
+  printf "   [${BLUE}3${WHITE}] ${PURPLE}Versão de Desenvolvimento (alan-alteracoes)${WHITE} - Recursos em homologação\n"
+  printf "   [${BLUE}4${WHITE}] ${CYAN}Personalizada${WHITE} - Digitar o nome de outra branch específica\n\n"
+  printf "   ${WHITE}Digite a opção desejada [1-4] (Padrão: 1): ${PURPLE}"
+  read -r opt_branch
+  opt_branch="${opt_branch:-1}"
+
+  case "${opt_branch}" in
+    2)
+      BRANCH_AMANDA_ESCOLHIDA="davi-alteracoes"
+      ;;
+    3)
+      BRANCH_AMANDA_ESCOLHIDA="alan-alteracoes"
+      ;;
+    4)
+      printf "\n   ${WHITE}Digite o nome exato da branch remota: ${PURPLE}"
+      read -r BRANCH_AMANDA_ESCOLHIDA
+      [ -z "${BRANCH_AMANDA_ESCOLHIDA}" ] && BRANCH_AMANDA_ESCOLHIDA="main"
+      ;;
+    *)
+      BRANCH_AMANDA_ESCOLHIDA="main"
+      ;;
+  esac
+
+  export BRANCH_AMANDA_ESCOLHIDA
+  if [ -n "${ARQUIVO_VARIAVEIS_USADO:-}" ] && [ -f "${ARQUIVO_VARIAVEIS_USADO}" ]; then
+    sed -i '/^BRANCH_AMANDA_ESCOLHIDA=/d' "${ARQUIVO_VARIAVEIS_USADO}"
+    echo "BRANCH_AMANDA_ESCOLHIDA=\"${BRANCH_AMANDA_ESCOLHIDA}\"" >> "${ARQUIVO_VARIAVEIS_USADO}"
+  elif [ -n "${empresa:-}" ] && [ -f "/root/VARIAVEIS_INSTALACAO_INSTANCIA_${empresa}" ]; then
+    sed -i '/^BRANCH_AMANDA_ESCOLHIDA=/d' "/root/VARIAVEIS_INSTALACAO_INSTANCIA_${empresa}"
+    echo "BRANCH_AMANDA_ESCOLHIDA=\"${BRANCH_AMANDA_ESCOLHIDA}\"" >> "/root/VARIAVEIS_INSTALACAO_INSTANCIA_${empresa}"
+  fi
+
+  printf "\n   ${GREEN}>> Canal selecionado: ${BLUE}%s${WHITE}\n\n" "${BRANCH_AMANDA_ESCOLHIDA}"
+  sleep 1
+}
+
+# ================================================================
 # ATUALIZAÇÃO DOCKER COMPOSE AMANDA
 # ================================================================
 atualizar_amanda_docker() {
@@ -1440,18 +1447,81 @@ atualizar_amanda_docker() {
     return 0
   fi
 
+  # Selecionar canal/branch desejado
+  selecionar_canal_branch_amanda "a atualização"
+
   banner
-  printf "${PURPLE} >> Sincronizando com o repositório oficial (branch main)...${WHITE}\n"
+  printf "${PURPLE} >> Sincronizando com o repositório oficial (branch ${BRANCH_AMANDA_ESCOLHIDA})...${WHITE}\n"
   echo
 
   cd "${app_dir}" || cd "${compose_dir}" || trata_erro "cd para diretorio da instalacao"
-  git fetch origin main --prune 2>/dev/null || true
+  git config --global --add safe.directory "${app_dir}" 2>/dev/null || true
+  git fetch --all --prune 2>/dev/null || true
+  git clean -fd -e .env -e "*/.env" -e ssl 2>/dev/null || true
   git checkout -f 2>/dev/null || true
   git reset --hard 2>/dev/null || true
-  git clean -fd 2>/dev/null || true
-  git checkout -B main origin/main 2>/dev/null || true
-  git reset --hard origin/main
-  git clean -fd 2>/dev/null || true
+
+  if git show-ref --verify --quiet "refs/remotes/origin/${BRANCH_AMANDA_ESCOLHIDA}"; then
+    git checkout -f -B "${BRANCH_AMANDA_ESCOLHIDA}" "origin/${BRANCH_AMANDA_ESCOLHIDA}"
+    git reset --hard "origin/${BRANCH_AMANDA_ESCOLHIDA}"
+    printf "${GREEN} >> Sincronizado com sucesso na branch: ${BRANCH_AMANDA_ESCOLHIDA}${WHITE}\n"
+  elif git show-ref --verify --quiet refs/remotes/origin/main; then
+    printf "${YELLOW} >> Aviso: Branch '${BRANCH_AMANDA_ESCOLHIDA}' não encontrada no origin. Sincronizando com a branch main...${WHITE}\n"
+    git checkout -f -B main origin/main
+    git reset --hard origin/main
+  else
+    git checkout -f -B master origin/master
+    git reset --hard origin/master
+  fi
+  git clean -fd -e .env -e "*/.env" -e ssl 2>/dev/null || true
+
+  # Assegurar que o .env do Docker Compose existe (restaura a partir das variáveis salvas se necessário)
+  if [ ! -f "${compose_dir}/.env" ]; then
+    if [ -n "${ARQUIVO_VARIAVEIS_USADO:-}" ] && [ -f "${ARQUIVO_VARIAVEIS_USADO}" ]; then
+      source "${ARQUIVO_VARIAVEIS_USADO}" 2>/dev/null
+    elif [ -f "${INSTALADOR_DIR}/VARIAVEIS_INSTALACAO_INSTANCIA_${empresa:-amanda}" ]; then
+      source "${INSTALADOR_DIR}/VARIAVEIS_INSTALACAO_INSTANCIA_${empresa:-amanda}" 2>/dev/null
+    elif [ -f "/root/VARIAVEIS_INSTALACAO_INSTANCIA_${empresa:-amanda}" ]; then
+      source "/root/VARIAVEIS_INSTALACAO_INSTANCIA_${empresa:-amanda}" 2>/dev/null
+    fi
+    cat <<EOF > "${compose_dir}/.env"
+COMPOSE_PROJECT_NAME=${empresa:-amanda}
+EMPRESA=${empresa:-amanda}
+NODE_ENV=production
+BACKEND_URL=${subdominio_backend}
+FRONTEND_URL=${subdominio_frontend}
+URL_API_OFICIAL=${subdominio_api_oficial:-}
+PORT_BACKEND=${backend_port:-8080}
+PORT_FRONTEND=${frontend_port:-3000}
+PORT_DB=${PORT_DB:-5432}
+PORT_PGBOUNCER=${PORT_PGBOUNCER:-6432}
+PORT_REDIS=${PORT_REDIS:-6379}
+PORT_WUZAPI=${PORT_WUZAPI:-8090}
+PORT_DISPATCHER=${PORT_DISPATCHER:-8095}
+PORT_TRANSCRIBER=${PORT_TRANSCRIBER:-4002}
+
+DB_USER=${empresa:-amanda}
+DB_PASS=${senha_deploy:-Acertitech13@}
+DB_NAME=${empresa:-amanda}
+DB_NAME_APIOFICIAL=api_oficial
+
+JWT_SECRET=${jwt_secret}
+JWT_REFRESH_SECRET=${jwt_refresh_secret}
+MASTER_KEY=${senha_master}
+
+WUZAPI_ADMIN_TOKEN=adminpro123
+WUZAPI_GLOBAL_ENCRYPTION_KEY=mF9vK2xQ8zP4wR6tY1uI3oA5sD7fG0hJ
+WUZAPI_GLOBAL_HMAC_KEY=kH3jL5mN7pQ9rT1vX3zB5dF7gJ9lO1qS
+
+USE_WHATSAPP_OFICIAL=false
+TOKEN_API_OFICIAL="adminpro"
+USE_GO_CAMPAIGN_DISPATCHER=true
+TRANSCRIBE_URL=http://api_transcricao:4002
+EOF
+    [ "${compose_dir}" != "${app_dir}" ] && cp "${compose_dir}/.env" "${app_dir}/.env" 2>/dev/null || true
+    [ -d "${compose_dir}/backend" ] && cp "${compose_dir}/.env" "${compose_dir}/backend/.env" 2>/dev/null || true
+    [ -d "${compose_dir}/frontend" ] && echo "REACT_APP_BACKEND_URL=${subdominio_backend}" > "${compose_dir}/frontend/.env" 2>/dev/null || true
+  fi
 
   banner
   printf "${PURPLE} >> Reconstruindo e reiniciando todos os contêineres da AMANDA (${empresa:-amanda})...${WHITE}\n"
@@ -1460,6 +1530,12 @@ atualizar_amanda_docker() {
   if [ ! -d "${compose_dir}/wuzapi" ]; then
     git clone --depth 1 https://github.com/asternic/wuzapi.git "${compose_dir}/wuzapi" 2>/dev/null || true
   fi
+
+  # Assegurar Dockerfiles para que todas as imagens sejam construídas e tagueadas com o nome da empresa
+  [ -f "${compose_dir}/postgres/Dockerfile" ] || (mkdir -p "${compose_dir}/postgres" && echo "FROM postgres:17" > "${compose_dir}/postgres/Dockerfile")
+  [ -f "${compose_dir}/redis/Dockerfile" ] || (mkdir -p "${compose_dir}/redis" && echo "FROM redis:7.4-alpine" > "${compose_dir}/redis/Dockerfile")
+  [ -f "${compose_dir}/pgbouncer/Dockerfile" ] || (mkdir -p "${compose_dir}/pgbouncer" && echo "FROM edoburu/pgbouncer:1.21.0-p2" > "${compose_dir}/pgbouncer/Dockerfile")
+  [ -f "${compose_dir}/wuzapi/Dockerfile.official" ] || (mkdir -p "${compose_dir}/wuzapi" && echo "FROM asternic/wuzapi:latest" > "${compose_dir}/wuzapi/Dockerfile.official")
   if [ -f "${compose_dir}/docker-compose.yml" ]; then
     python3 - "${compose_dir}/docker-compose.yml" "${empresa:-amanda}" << 'PYEOF'
 import sys, re
@@ -1469,12 +1545,6 @@ with open(compose_file, "r", encoding="utf-8") as f:
 if not re.search(r"^name:\s*", content, re.M):
     content = "name: ${COMPOSE_PROJECT_NAME:-amanda}\n" + content
 content = re.sub(r'container_name:\s*(?:multiflow|amanda)_', 'container_name: ${COMPOSE_PROJECT_NAME:-amanda}_', content)
-content = re.sub(
-    r'(^[ ]{2}wuzapi:[ ]*\n)[ ]{4}build:[ ]*\n(?:[ ]{6,}.*\n)*',
-    r'\1    image: asternic/wuzapi:latest\n',
-    content,
-    flags=re.M
-)
 with open(compose_file, "w", encoding="utf-8") as f:
     f.write(content)
 PYEOF
@@ -4331,6 +4401,8 @@ menu_ferramentas() {
     printf "   [${BLUE}25${WHITE}] Atualizar MultiFlow-VOZ\n"
     printf "   [${BLUE}26${WHITE}] Instalar HUB MultiFlow\n"
     printf "   [${BLUE}27${WHITE}] Atualizar HUB MultiFlow\n"
+    printf "   [${BLUE}31${WHITE}] Instalar API Oficial (WhatsApp Meta Cloud)\n"
+    printf "   [${BLUE}32${WHITE}] Atualizar API Oficial\n"
     echo
     printf "  ${BLUE}━━ Versão da aplicação ━━${WHITE}\n"
     printf "   [${BLUE}4${WHITE}] Roolback Versão\n"
@@ -4433,6 +4505,12 @@ menu_ferramentas() {
       ;;
     30)
       atualizar_ultrawhats
+      ;;
+    31)
+      instalar_api_oficial
+      ;;
+    32)
+      atualizar_api_oficial
       ;;
     6)
       SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -4631,11 +4709,20 @@ selecionar_plataforma_desinstalacao() {
       done
       [ $ja_existe -eq 0 ] && plataformas+=("$nome")
     done
-  fi
 
-  # Se nenhuma plataforma encontrada, sugerir amanda
-  if [ ${#plataformas[@]} -eq 0 ]; then
-    plataformas+=("amanda")
+    # 3. Buscar nomes a partir de volumes residuais de plataformas
+    local v_nomes
+    v_nomes=$(docker volume ls -q 2>/dev/null | grep -E '_(postgres_data|redis_data|backend_database|backend_public|wuzapi_data)' | sed -E 's/_.*//' | sort -u)
+    for nome in $v_nomes; do
+      case "$nome" in
+        .*|backup*|lost+found|deploy|personalizacoes|redis*|portainer*) continue ;;
+      esac
+      local ja_existe_v=0
+      for p in "${plataformas[@]}"; do
+        [ "$p" = "$nome" ] && ja_existe_v=1 && break
+      done
+      [ $ja_existe_v -eq 0 ] && plataformas+=("$nome")
+    done
   fi
 
   banner
@@ -4643,6 +4730,30 @@ selecionar_plataforma_desinstalacao() {
   printf "${WHITE}║        ${PURPLE}SELECIONE QUAL PLATAFORMA DOCKER DESEJA DESINSTALAR${WHITE}           ║${WHITE}\n"
   printf "${WHITE}╚══════════════════════════════════════════════════════════════════════╝${WHITE}\n"
   echo
+
+  if [ ${#plataformas[@]} -eq 0 ]; then
+    printf "   ${GREEN}✔ ${WHITE}Nenhuma plataforma Docker instalada detectada no servidor!${WHITE}\n\n"
+    printf "   [${BLUE}M${WHITE}] Informar manualmente outro nome de plataforma (para limpar resíduos)\n"
+    printf "   [${BLUE}0${WHITE}] Cancelar e Voltar ao Menu\n\n"
+    printf "${WHITE}   Escolha uma opção: ${PURPLE}"
+    read -r op_plat
+    case "$op_plat" in
+      M|m)
+        printf "\n${WHITE} >> Digite o nome exato da plataforma que deseja desinstalar: ${PURPLE}"
+        read -r plataforma_escolhida
+        plataforma_escolhida=$(echo "$plataforma_escolhida" | tr -d '[:space:]')
+        [ -z "$plataforma_escolhida" ] && return 1
+        echo
+        printf "${GREEN} >> Plataforma informada para desinstalação: ${YELLOW}%s${WHITE}\n" "$plataforma_escolhida"
+        sleep 1
+        return 0
+        ;;
+      *)
+        return 1
+        ;;
+    esac
+  fi
+
   printf "   ${WHITE}Plataformas Docker detectadas no servidor:${WHITE}\n\n"
 
   local idx=1
@@ -4713,28 +4824,80 @@ desinstalar_amanda_preservando_dados() {
   printf "${WHITE} >> 1. Parando e removendo contêineres Docker da ${PURPLE}%s${WHITE} (Preservando Volumes)...${WHITE}\n" "${empresa_alvo}"
   echo
   if [ -d "${compose_dir}" ] && [ -f "${compose_dir}/docker-compose.yml" ]; then
-    (cd "${compose_dir}" && docker compose -p "${empresa_alvo}" down 2>/dev/null || true)
+    (cd "${compose_dir}" && docker compose -p "${empresa_alvo}" down --rmi local --remove-orphans 2>/dev/null || true)
   fi
-  docker compose -p "${empresa_alvo}" down 2>/dev/null || true
+  docker compose -p "${empresa_alvo}" down --rmi local --remove-orphans 2>/dev/null || true
 
   # Remover APENAS contêineres que pertençam a esta plataforma específica
   local c_ids
-  c_ids=$(docker ps -a --format '{{.ID}} {{.Names}}' 2>/dev/null | grep -E " ${empresa_alvo}_" | awk '{print $1}')
-  if [ -n "$c_ids" ]; then
-    docker rm -f $c_ids 2>/dev/null || true
+  c_ids=$(docker ps -a --format '{{.ID}} {{.Names}}' 2>/dev/null | grep -E " (${empresa_alvo}_|${empresa_alvo}-)" | awk '{print $1}')
+  local c_ids_label
+  c_ids_label=$(docker ps -a -q --filter "label=com.docker.compose.project=${empresa_alvo}" 2>/dev/null)
+  local all_c_ids
+  all_c_ids=$(printf "%s\n%s\n" "$c_ids" "$c_ids_label" | sed '/^$/d' | sort -u)
+  if [ -n "$all_c_ids" ]; then
+    docker rm -f $all_c_ids 2>/dev/null || true
   fi
 
-  printf "${WHITE} >> 2. Removendo configurações do Nginx exclusivas de ${PURPLE}%s${WHITE}...${WHITE}\n" "${empresa_alvo}"
+  printf "${WHITE} >> 2. Removendo imagens Docker exclusivas de ${PURPLE}%s${WHITE}...${WHITE}\n" "${empresa_alvo}"
+  local imgs_by_label
+  imgs_by_label=$(docker images -q --filter "label=com.docker.compose.project=${empresa_alvo}" 2>/dev/null)
+  local imgs_by_name
+  imgs_by_name=$(docker images --format '{{.ID}} {{.Repository}}' 2>/dev/null | grep -E " (${empresa_alvo}-|${empresa_alvo}_|${empresa_alvo}:)" | awk '{print $1}')
+  local all_imgs
+  all_imgs=$(printf "%s\n%s\n" "$imgs_by_label" "$imgs_by_name" | sed '/^$/d' | sort -u)
+  if [ -n "$all_imgs" ]; then
+    for img in $all_imgs; do
+      local img_repo
+      img_repo=$(docker images --format '{{.Repository}}:{{.Tag}}' "$img" 2>/dev/null | head -1)
+      printf "   ${GRAY}- Removendo imagem: %s (%s)${WHITE}\n" "$img" "${img_repo:-sem tag}"
+      docker rmi -f "$img" 2>/dev/null || true
+    done
+    docker image prune -f 2>/dev/null || true
+  fi
+
+  # Remover imagens base auxiliares utilizadas pela AMANDA caso não estejam em uso por nenhum outro contêiner restante
+  local imgs_auxiliares=("asternic/wuzapi" "postgres:17" "redis:7.4-alpine" "edoburu/pgbouncer")
+  for img_pat in "${imgs_auxiliares[@]}"; do
+    local img_ids
+    img_ids=$(docker images --format '{{.ID}} {{.Repository}}:{{.Tag}}' 2>/dev/null | grep "$img_pat" | awk '{print $1}' | sort -u)
+    for i_id in $img_ids; do
+      local em_uso
+      em_uso=$(docker ps -a --filter "ancestor=$i_id" -q 2>/dev/null)
+      if [ -z "$em_uso" ]; then
+        local repo_tag
+        repo_tag=$(docker images --format '{{.Repository}}:{{.Tag}}' "$i_id" 2>/dev/null | head -1)
+        printf "   ${GRAY}- Removendo imagem base auxiliar da AMANDA: %s (%s)${WHITE}\n" "$i_id" "${repo_tag:-$img_pat}"
+        docker rmi -f "$i_id" 2>/dev/null || true
+      fi
+    done
+  done
+
+  printf "${WHITE} >> 3. Removendo rede Docker exclusiva de ${PURPLE}%s${WHITE}...${WHITE}\n" "${empresa_alvo}"
+  docker network rm "${empresa_alvo}_net" 2>/dev/null || true
+  docker network rm "${empresa_alvo}-net" 2>/dev/null || true
+  docker network rm "${empresa_alvo}_default" 2>/dev/null || true
+
+  printf "${WHITE} >> 4. Removendo configurações do Nginx exclusivas de ${PURPLE}%s${WHITE}...${WHITE}\n" "${empresa_alvo}"
   rm -f /etc/nginx/sites-enabled/${empresa_alvo}-* 2>/dev/null || true
   rm -f /etc/nginx/sites-available/${empresa_alvo}-* 2>/dev/null || true
+  rm -f /etc/nginx/sites-enabled/${empresa_alvo}.* 2>/dev/null || true
+  rm -f /etc/nginx/sites-available/${empresa_alvo}.* 2>/dev/null || true
+  rm -f /etc/nginx/conf.d/${empresa_alvo}-*.conf 2>/dev/null || true
+  rm -f /etc/nginx/conf.d/${empresa_alvo}.*.conf 2>/dev/null || true
   systemctl reload nginx 2>/dev/null || true
 
-  printf "${WHITE} >> 3. Removendo diretório de código da plataforma (${app_dir})...${WHITE}\n"
+  printf "${WHITE} >> 5. Removendo diretório de código da plataforma (${app_dir})...${WHITE}\n"
   sudo rm -rf "${app_dir}" 2>/dev/null || true
-  [ -d "/home/deploy/multiflow" ] && sudo rm -rf "/home/deploy/multiflow" 2>/dev/null || true
+  if [ "${empresa_alvo}" = "multiflow" ]; then
+    [ -d "/home/deploy/multiflow" ] && sudo rm -rf "/home/deploy/multiflow" 2>/dev/null || true
+  fi
   sudo rm -rf "/home/deploy/personalizacoes/${empresa_alvo}" 2>/dev/null || true
+  rm -f "${INSTALADOR_DIR}/VARIAVEIS_INSTALACAO_INSTANCIA_${empresa_alvo}" 2>/dev/null || true
   rm -f "${INSTALADOR_DIR}/ETAPA_INSTALACAO_${empresa_alvo}" 2>/dev/null || true
-  [ "${empresa_alvo}" = "amanda" ] && rm -f "${INSTALADOR_DIR}/ETAPA_INSTALACAO" 2>/dev/null || true
+  if [ -f "${INSTALADOR_DIR}/VARIAVEIS_INSTALACAO" ] && grep -qw "empresa=${empresa_alvo}" "${INSTALADOR_DIR}/VARIAVEIS_INSTALACAO" 2>/dev/null; then
+    rm -f "${INSTALADOR_DIR}/VARIAVEIS_INSTALACAO" "${INSTALADOR_DIR}/ETAPA_INSTALACAO" 2>/dev/null || true
+  fi
 
   local outras_plataformas=0
   if [ -d "/home/deploy" ]; then
@@ -4745,7 +4908,13 @@ desinstalar_amanda_preservando_dados() {
         case "$b_item" in
           .*|backup*|lost+found|personalizacoes) continue ;;
         esac
-        if [ "$b_item" != "${empresa_alvo}" ] && [ "$b_item" != "multiflow" ]; then
+        [ "$b_item" = "${empresa_alvo}" ] && continue
+        if [ -f "${item}/docker-compose.yml" ] || \
+           [ -f "${item}/amanda/docker-compose.yml" ] || \
+           [ -f "${item}/.env" ] || \
+           [ -f "${item}/amanda/.env" ] || \
+           [ -d "${item}/backend" ] || \
+           [ -d "${item}/amanda" ]; then
           outras_plataformas=1
           break
         fi
@@ -4763,7 +4932,7 @@ desinstalar_amanda_preservando_dados() {
   echo
   printf "${GREEN}══════════════════════════════════════════════════════════════════${WHITE}\n"
   printf "${GREEN}✅ PLATAFORMA DOCKER [%s] DESINSTALADA COM SUCESSO!${WHITE}\n" "${empresa_alvo}"
-  printf "${WHITE}   Os contêineres e códigos da plataforma foram removidos.\n"
+  printf "${WHITE}   Os contêineres, imagens e códigos da plataforma foram removidos.\n"
   printf "${WHITE}   Nenhum processo do PM2 ou de outras plataformas foi afetado.\n"
   printf "${GREEN}   ✓ Volumes de dados preservados na VPS:${WHITE}\n"
   docker volume ls --filter "name=${empresa_alvo}_" --format "     - {{.Name}}" 2>/dev/null || true
@@ -4792,9 +4961,10 @@ desinstalar_amanda_apagando_dados() {
   printf "   ${RED}✖${WHITE} Todos os Bancos de Dados PostgreSQL de ${empresa_alvo} (mensagens, tickets, clientes)\n"
   printf "   ${RED}✖${WHITE} Todas as Filas e Cache Redis de ${empresa_alvo}\n"
   printf "   ${RED}✖${WHITE} Todas as sessões salvas de WhatsApp e arquivos de mídia da ${empresa_alvo}\n"
-  printf "   ${RED}✖${WHITE} Todos os Volumes Docker persistentes exclusivos da ${empresa_alvo}\n"
+  printf "   ${RED}✖${WHITE} Todos os Volumes Docker persistentes e anônimos exclusivos da ${empresa_alvo}\n"
+  printf "   ${RED}✖${WHITE} Todas as Imagens Docker criadas para a ${empresa_alvo}\n"
   printf "   ${RED}✖${WHITE} Todos os contêineres e código em /home/deploy/${empresa_alvo}\n\n"
-  printf "${CYAN} ℹ️  Processos do PM2 e outras plataformas no servidor NÃO serão tocados.${WHITE}\n\n"
+  printf "${CYAN} ℹ️  Processos do PM2, Portainer e outras plataformas no servidor NÃO serão tocados.${WHITE}\n\n"
 
   printf "${WHITE} >> Tem certeza absoluta que deseja DESTRUIR OS DADOS da plataforma ${PURPLE}%s${WHITE}? (S/N): " "${empresa_alvo}"
   read -r resp_conf1
@@ -4816,38 +4986,99 @@ desinstalar_amanda_apagando_dados() {
   fi
 
   banner
-  printf "${RED} >> 1. Parando e destruindo contêineres e volumes Compose da ${empresa_alvo}...${WHITE}\n"
+  printf "${RED} >> 1. Parando contêineres e volumes Compose da plataforma ${empresa_alvo}...${WHITE}\n"
   echo
   if [ -d "${compose_dir}" ] && [ -f "${compose_dir}/docker-compose.yml" ]; then
-    (cd "${compose_dir}" && docker compose -p "${empresa_alvo}" down -v --remove-orphans 2>/dev/null || true)
+    (cd "${compose_dir}" && docker compose -p "${empresa_alvo}" down --rmi local -v --remove-orphans 2>/dev/null || true)
   fi
-  docker compose -p "${empresa_alvo}" down -v --remove-orphans 2>/dev/null || true
+  docker compose -p "${empresa_alvo}" down --rmi local -v --remove-orphans 2>/dev/null || true
 
-  printf "${RED} >> 2. Forçando remoção apenas de contêineres de ${empresa_alvo}...${WHITE}\n"
+  printf "${RED} >> 2. Forçando remoção de contêineres residuais de ${empresa_alvo}...${WHITE}\n"
   local c_ids
-  c_ids=$(docker ps -a --format '{{.ID}} {{.Names}}' 2>/dev/null | grep -E " ${empresa_alvo}_" | awk '{print $1}')
-  if [ -n "$c_ids" ]; then
-    docker rm -f $c_ids 2>/dev/null || true
+  c_ids=$(docker ps -a --format '{{.ID}} {{.Names}}' 2>/dev/null | grep -E " (${empresa_alvo}_|${empresa_alvo}-)" | awk '{print $1}')
+  local c_ids_label
+  c_ids_label=$(docker ps -a -q --filter "label=com.docker.compose.project=${empresa_alvo}" 2>/dev/null)
+  local all_c_ids
+  all_c_ids=$(printf "%s\n%s\n" "$c_ids" "$c_ids_label" | sed '/^$/d' | sort -u)
+  if [ -n "$all_c_ids" ]; then
+    docker rm -f -v $all_c_ids 2>/dev/null || true
   fi
 
-  printf "${RED} >> 3. APAGANDO VOLUMES DOCKER EXCLUSIVOS DA ${empresa_alvo}...${WHITE}\n"
-  local vols
-  vols=$(docker volume ls -q 2>/dev/null | grep -E "^${empresa_alvo}_")
-  if [ -n "$vols" ]; then
-    docker volume rm -f $vols 2>/dev/null || true
+  printf "${RED} >> 3. APAGANDO TODOS OS VOLUMES DOCKER EXCLUSIVOS DA ${empresa_alvo}...${WHITE}\n"
+  local vols_by_prefix
+  vols_by_prefix=$(docker volume ls -q 2>/dev/null | grep -E "^(${empresa_alvo}_|${empresa_alvo}-)")
+  local vols_by_label
+  vols_by_label=$(docker volume ls -q --filter "label=com.docker.compose.project=${empresa_alvo}" 2>/dev/null)
+  local all_vols
+  all_vols=$(printf "%s\n%s\n" "$vols_by_prefix" "$vols_by_label" | sed '/^$/d' | sort -u)
+  if [ -n "$all_vols" ]; then
+    for v in $all_vols; do
+      printf "   ${GRAY}- Apagando volume: ${v}${WHITE}\n"
+      docker volume rm -f "$v" 2>/dev/null || true
+    done
+  else
+    printf "   ${GRAY}(Nenhum volume residual encontrado para ${empresa_alvo})${WHITE}\n"
   fi
 
-  printf "${RED} >> 4. Removendo rede Docker exclusiva da ${empresa_alvo}...${WHITE}\n"
+  printf "${RED} >> 4. APAGANDO TODAS AS IMAGENS DOCKER EXCLUSIVAS DA ${empresa_alvo}...${WHITE}\n"
+  # Imagens com label do Compose da empresa
+  local imgs_by_label
+  imgs_by_label=$(docker images -q --filter "label=com.docker.compose.project=${empresa_alvo}" 2>/dev/null)
+  # Imagens com tag/nome contendo o prefixo da empresa (ex: amanda-backend, amanda-frontend, amanda_*)
+  local imgs_by_name
+  imgs_by_name=$(docker images --format '{{.ID}} {{.Repository}}' 2>/dev/null | grep -E " (${empresa_alvo}-|${empresa_alvo}_|${empresa_alvo}:)" | awk '{print $1}')
+  local all_imgs
+  all_imgs=$(printf "%s\n%s\n" "$imgs_by_label" "$imgs_by_name" | sed '/^$/d' | sort -u)
+  if [ -n "$all_imgs" ]; then
+    for img in $all_imgs; do
+      local img_repo
+      img_repo=$(docker images --format '{{.Repository}}:{{.Tag}}' "$img" 2>/dev/null | head -1)
+      printf "   ${GRAY}- Apagando imagem: %s (%s)${WHITE}\n" "$img" "${img_repo:-sem tag}"
+      docker rmi -f "$img" 2>/dev/null || true
+    done
+  else
+    printf "   ${GRAY}(Nenhuma imagem residual encontrada para ${empresa_alvo})${WHITE}\n"
+  fi
+
+  # Remover imagens base auxiliares utilizadas pela AMANDA caso não estejam em uso por nenhum outro contêiner restante (ex: portainer ou outra plataforma)
+  local imgs_auxiliares=("asternic/wuzapi" "postgres:17" "redis:7.4-alpine" "edoburu/pgbouncer")
+  for img_pat in "${imgs_auxiliares[@]}"; do
+    local img_ids
+    img_ids=$(docker images --format '{{.ID}} {{.Repository}}:{{.Tag}}' 2>/dev/null | grep "$img_pat" | awk '{print $1}' | sort -u)
+    for i_id in $img_ids; do
+      local em_uso
+      em_uso=$(docker ps -a --filter "ancestor=$i_id" -q 2>/dev/null)
+      if [ -z "$em_uso" ]; then
+        local repo_tag
+        repo_tag=$(docker images --format '{{.Repository}}:{{.Tag}}' "$i_id" 2>/dev/null | head -1)
+        printf "   ${GRAY}- Apagando imagem base auxiliar da AMANDA: %s (%s)${WHITE}\n" "$i_id" "${repo_tag:-$img_pat}"
+        docker rmi -f "$i_id" 2>/dev/null || true
+      fi
+    done
+  done
+
+  # Limpar imagens intermediárias/órfãs (dangling) sem tag geradas durante o build desta plataforma
+  docker image prune -f 2>/dev/null || true
+
+  printf "${RED} >> 5. Removendo rede Docker exclusiva da ${empresa_alvo}...${WHITE}\n"
   docker network rm "${empresa_alvo}_net" 2>/dev/null || true
+  docker network rm "${empresa_alvo}-net" 2>/dev/null || true
+  docker network rm "${empresa_alvo}_default" 2>/dev/null || true
 
-  printf "${RED} >> 5. Removendo configurações do Nginx de ${empresa_alvo}...${WHITE}\n"
+  printf "${RED} >> 6. Removendo configurações do Nginx de ${empresa_alvo}...${WHITE}\n"
   rm -f /etc/nginx/sites-enabled/${empresa_alvo}-* 2>/dev/null || true
   rm -f /etc/nginx/sites-available/${empresa_alvo}-* 2>/dev/null || true
+  rm -f /etc/nginx/sites-enabled/${empresa_alvo}.* 2>/dev/null || true
+  rm -f /etc/nginx/sites-available/${empresa_alvo}.* 2>/dev/null || true
+  rm -f /etc/nginx/conf.d/${empresa_alvo}-*.conf 2>/dev/null || true
+  rm -f /etc/nginx/conf.d/${empresa_alvo}.*.conf 2>/dev/null || true
   systemctl reload nginx 2>/dev/null || true
 
-  printf "${RED} >> 6. Apagando código-fonte e dados em disco (${app_dir})...${WHITE}\n"
+  printf "${RED} >> 7. Apagando código-fonte e dados em disco (${app_dir})...${WHITE}\n"
   sudo rm -rf "${app_dir}" 2>/dev/null || true
-  [ -d "/home/deploy/multiflow" ] && sudo rm -rf "/home/deploy/multiflow" 2>/dev/null || true
+  if [ "${empresa_alvo}" = "multiflow" ]; then
+    [ -d "/home/deploy/multiflow" ] && sudo rm -rf "/home/deploy/multiflow" 2>/dev/null || true
+  fi
   sudo rm -rf "/home/deploy/personalizacoes/${empresa_alvo}" 2>/dev/null || true
 
   local outras_plataformas=0
@@ -4859,7 +5090,13 @@ desinstalar_amanda_apagando_dados() {
         case "$b_item" in
           .*|backup*|lost+found|personalizacoes) continue ;;
         esac
-        if [ "$b_item" != "${empresa_alvo}" ] && [ "$b_item" != "multiflow" ]; then
+        [ "$b_item" = "${empresa_alvo}" ] && continue
+        if [ -f "${item}/docker-compose.yml" ] || \
+           [ -f "${item}/amanda/docker-compose.yml" ] || \
+           [ -f "${item}/.env" ] || \
+           [ -f "${item}/amanda/.env" ] || \
+           [ -d "${item}/backend" ] || \
+           [ -d "${item}/amanda" ]; then
           outras_plataformas=1
           break
         fi
@@ -4874,7 +5111,7 @@ desinstalar_amanda_apagando_dados() {
     printf "${GREEN} >> Plataforma ${empresa_alvo} removida de /home/deploy. Demais plataformas preservadas.${WHITE}\n"
   fi
 
-  printf "${RED} >> 7. Removendo registros da instância ${empresa_alvo} no instalador...${WHITE}\n"
+  printf "${RED} >> 8. Removendo registros da instância ${empresa_alvo} no instalador...${WHITE}\n"
   rm -f "${INSTALADOR_DIR}/VARIAVEIS_INSTALACAO_INSTANCIA_${empresa_alvo}" 2>/dev/null || true
   rm -f "${INSTALADOR_DIR}/ETAPA_INSTALACAO_${empresa_alvo}" 2>/dev/null || true
   if [ -f "${INSTALADOR_DIR}/VARIAVEIS_INSTALACAO" ] && grep -qw "empresa=${empresa_alvo}" "${INSTALADOR_DIR}/VARIAVEIS_INSTALACAO" 2>/dev/null; then
@@ -4884,8 +5121,8 @@ desinstalar_amanda_apagando_dados() {
   echo
   printf "${RED}══════════════════════════════════════════════════════════════════${WHITE}\n"
   printf "${RED}💥 DESINSTALAÇÃO DA PLATAFORMA [%s] CONCLUÍDA!${WHITE}\n" "${empresa_alvo}"
-  printf "${WHITE}   Contêineres, códigos e bancos de dados de [%s] foram removidos.\n" "${empresa_alvo}"
-  printf "${GREEN}   Nenhum processo PM2 ou de outras plataformas foi tocado.${WHITE}\n"
+  printf "${WHITE}   Contêineres, imagens, volumes, códigos e bancos de dados de [%s] foram removidos.\n" "${empresa_alvo}"
+  printf "${GREEN}   Nenhum processo PM2, imagem base ou contêiner de outras plataformas foi tocado.${WHITE}\n"
   printf "${RED}══════════════════════════════════════════════════════════════════${WHITE}\n\n"
   printf "${WHITE}Pressione Enter para voltar ao menu...${WHITE}"
   read -r
@@ -5373,8 +5610,19 @@ questoes_dns_base() {
     banner
     printf "${GREEN} >> Modo Sem Domínio (IP / Localhost) selecionado.${WHITE}\n\n"
     
+    local is_local_env=0
+    if grep -qiE "microsoft|wsl" /proc/version 2>/dev/null || [ -n "${WSL_DISTRO_NAME:-}" ]; then
+      is_local_env=1
+    elif [ -n "$ip_atual" ] && ! ip -o addr show 2>/dev/null | grep -qF "$ip_atual"; then
+      is_local_env=1
+    fi
+
     local ip_sugerido="${ip_atual}"
-    if [ -z "$ip_sugerido" ] || [ "$ip_sugerido" = "127.0.0.1" ]; then
+    if [ "$is_local_env" = "1" ]; then
+      ip_sugerido="localhost"
+      printf "${YELLOW} >> Detectado ambiente local/WSL ou IP atrás de NAT (${ip_atual}).${WHITE}\n"
+      printf "${YELLOW}    Recomendado usar 'localhost' para testes na própria máquina.${WHITE}\n\n"
+    elif [ -z "$ip_sugerido" ] || [ "$ip_sugerido" = "127.0.0.1" ]; then
       ip_sugerido=$(hostname -I 2>/dev/null | awk '{print $1}')
     fi
     [ -z "$ip_sugerido" ] && ip_sugerido="localhost"
@@ -5409,10 +5657,19 @@ questoes_dns_base() {
 
   if [ -z "$subdominio_backend" ] || [ "$subdominio_backend" = "ip" ] || [ "$subdominio_backend" = "localhost" ]; then
     declare -g INSTALACAO_SEM_DOMINIO="1"
-    local host_escolhido="${ip_atual:-localhost}"
+    local is_local_env=0
+    if grep -qiE "microsoft|wsl" /proc/version 2>/dev/null || [ -n "${WSL_DISTRO_NAME:-}" ]; then
+      is_local_env=1
+    elif [ -n "$ip_atual" ] && ! ip -o addr show 2>/dev/null | grep -qF "$ip_atual"; then
+      is_local_env=1
+    fi
+    local host_escolhido="localhost"
+    if [ "$is_local_env" != "1" ] && [ -n "$ip_atual" ]; then
+      host_escolhido="${ip_atual}"
+    fi
     subdominio_backend="http://${host_escolhido}:8080"
     subdominio_frontend="http://${host_escolhido}:3000"
-    subdominio_oficial="http://${host_escolhido}:6000"
+    subdominio_oficial=""
     proxy="none"
     printf "${GREEN} >> Campo em branco. Alternando para modo Sem Domínio (${host_escolhido}).${WHITE}\n"
     sleep 2
@@ -5425,18 +5682,7 @@ questoes_dns_base() {
   echo
   read -p "> " subdominio_frontend
   echo
-
-  # ARMAZENA URL API OFICIAL
-  banner
-  local sugestao_oficial=""
-  local base_domain
-  base_domain=$(echo "$subdominio_backend" | sed -E 's|^[^.]+\.||')
-  [ -n "$base_domain" ] && sugestao_oficial="oficial.${base_domain}"
-  printf "${WHITE} >> Insira o domínio/URL da ${PURPLE}API Oficial${WHITE} (WhatsApp Meta Cloud) [Padrão: ${sugestao_oficial:-oficial.seudominio.com.br}]: \n"
-  echo
-  read -p "> " subdominio_oficial
-  subdominio_oficial="${subdominio_oficial:-$sugestao_oficial}"
-  echo
+  subdominio_oficial=""
 }
 
 # Valida se os domínios ou subdomínios estão acessíveis e apontados
@@ -5496,19 +5742,15 @@ questoes_variaveis_base() {
   read -p "> " email_deploy
   echo
   # DEFINE NOME DA EMPRESA
-  if [ -z "${empresa:-}" ]; then
-    banner
-    printf "${WHITE} >> Digite o nome da sua empresa (Letras minusculas e sem espaço) [padrão: amanda]: \n"
-    echo
-    read -p "> " empresa
-    empresa="${empresa:-amanda}"
-    empresa=$(echo "$empresa" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9_-')
-    echo
-  else
-    banner
-    printf "${WHITE} >> Empresa definida: ${GREEN}%s${WHITE}\n\n" "$empresa"
-    sleep 1
-  fi
+  banner
+  local emp_padrao="${empresa:-amanda}"
+  printf "${WHITE} >> Digite o nome da sua empresa (Letras minusculas e sem espaço) [padrão: ${GREEN}%s${WHITE}]: \n" "$emp_padrao"
+  echo
+  read -p "> " input_empresa
+  empresa="${input_empresa:-$emp_padrao}"
+  empresa=$(echo "$empresa" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9_-')
+  [ -z "$empresa" ] && empresa="amanda"
+  echo
   # DEFINE SENHA BASE
   banner
   printf "${WHITE} >> Insira a senha para o usuario Deploy, Redis e Banco de Dados [padrão: Acertitech13@]: \n"
@@ -5693,12 +5935,6 @@ define_portas_base() {
     st_disp="${YELLOW}[Em uso -> Alterado automaticamente para ${PORT_DISPATCHER}]${WHITE}"
   fi
 
-  if [ "$PORT_APIOFICIAL" = "6000" ]; then
-    st_oficial="${GREEN}[Livre - Porta 6000]${WHITE}"
-  else
-    st_oficial="${YELLOW}[Em uso -> Alterado automaticamente para ${PORT_APIOFICIAL}]${WHITE}"
-  fi
-
   printf "   ${WHITE}● ${CYAN}PORTAS EDITÁVEIS PELO USUÁRIO:${WHITE}\n"
   printf "     1) Backend AMANDA (API):       ${YELLOW}8080${WHITE}  ---> %b\n" "$st_be"
   printf "     2) Frontend AMANDA (Web):      ${YELLOW}3000${WHITE}  ---> %b\n\n" "$st_fe"
@@ -5709,8 +5945,7 @@ define_portas_base() {
   printf "     5) PgBouncer (Pool de Conexão): ${YELLOW}6432${WHITE}  ---> %b\n" "$st_pgb"
   printf "     6) API Transcrição de Áudio:   ${YELLOW}4002${WHITE}  ---> %b\n" "$st_transc"
   printf "     7) Wuzapi / WhatsApp Go:       ${YELLOW}8090${WHITE}  ---> %b\n" "$st_wuzapi"
-  printf "     8) GoFlow Campaign Dispatcher: ${YELLOW}8095${WHITE}  ---> %b\n" "$st_disp"
-  printf "     9) API Oficial Meta WhatsApp:  ${YELLOW}6000${WHITE}  ---> %b\n\n" "$st_oficial"
+  printf "     8) GoFlow Campaign Dispatcher: ${YELLOW}8095${WHITE}  ---> %b\n\n" "$st_disp"
   printf "   ${WHITE}ℹ️  ${YELLOW}Nota: PostgreSQL, Redis e PgBouncer serão alterados automaticamente caso em uso.${WHITE}\n"
   printf "   ${WHITE}ℹ️  ${YELLOW}As únicas portas personalizáveis nesta etapa são as do Frontend e Backend.${WHITE}\n\n"
 
@@ -5845,12 +6080,6 @@ define_portas_base() {
     st_disp="${YELLOW}[Em uso -> Alocado automaticamente na porta ${PORT_DISPATCHER} (8095 + $((PORT_DISPATCHER - 8095)))]${WHITE}"
   fi
 
-  if [ "$PORT_APIOFICIAL" = "6000" ]; then
-    st_oficial="${GREEN}[Livre - Porta 6000]${WHITE}"
-  else
-    st_oficial="${YELLOW}[Em uso -> Alocado automaticamente na porta ${PORT_APIOFICIAL} (6000 + $((PORT_APIOFICIAL - 6000)))]${WHITE}"
-  fi
-
   printf "   ${WHITE}● ${CYAN}PORTAS DEFINIDAS E VALIDADAS PARA A INSTALAÇÃO:${WHITE}\n"
   printf "     1) Backend AMANDA (API):       ${YELLOW}%-6s${WHITE} ---> %b\n" "${backend_port}" "$st_be_final"
   printf "     2) Frontend AMANDA (Web):      ${YELLOW}%-6s${WHITE} ---> %b\n\n" "${frontend_port}" "$st_fe_final"
@@ -5861,8 +6090,7 @@ define_portas_base() {
   printf "     5) PgBouncer (Pool de Conexão): ${YELLOW}%-6s${WHITE} ---> %b\n" "${PORT_PGBOUNCER}" "$st_pgb"
   printf "     6) API Transcrição de Áudio:   ${YELLOW}%-6s${WHITE} ---> %b\n" "${PORT_TRANSCRIBER}" "$st_transc"
   printf "     7) Wuzapi / WhatsApp Go:       ${YELLOW}%-6s${WHITE} ---> %b\n" "${PORT_WUZAPI}" "$st_wuzapi"
-  printf "     8) GoFlow Campaign Dispatcher: ${YELLOW}%-6s${WHITE} ---> %b\n" "${PORT_DISPATCHER}" "$st_disp"
-  printf "     9) API Oficial Meta WhatsApp:  ${YELLOW}%-6s${WHITE} ---> %b\n\n" "${PORT_APIOFICIAL}" "$st_oficial"
+  printf "     8) GoFlow Campaign Dispatcher: ${YELLOW}%-6s${WHITE} ---> %b\n\n" "${PORT_DISPATCHER}" "$st_disp"
 
   printf "   ${GREEN}✔ ${WHITE}Todas as portas foram verificadas e validadas com sucesso na VPS!${WHITE}\n\n"
   printf "${WHITE} >> Pressione ${GREEN}[ENTER]${WHITE} para prosseguir para a confirmação dos dados...${WHITE}\n"
@@ -5874,7 +6102,6 @@ dados_instalacao_base() {
   printf "   ${WHITE}Anote os dados abaixo\n\n"
   printf "   ${WHITE}Subdominio Backend: ---->> ${YELLOW}${subdominio_backend}\n"
   printf "   ${WHITE}Subdominiio Frontend: -->> ${YELLOW}${subdominio_frontend}\n"
-  printf "   ${WHITE}Subdominio API Oficial: ->> ${YELLOW}${subdominio_oficial}\n"
   printf "   ${WHITE}Seu Email: ------------->> ${YELLOW}${email_deploy}\n"
   printf "   ${WHITE}Nome da Empresa: ------->> ${YELLOW}${empresa}\n"
   printf "   ${WHITE}Senha Deploy: ---------->> ${YELLOW}${senha_deploy}\n"
@@ -5895,7 +6122,6 @@ dados_instalacao_base() {
   printf "   ${WHITE}Porta Transcrição: ----->> ${YELLOW}${PORT_TRANSCRIBER:-4002}\n"
   printf "   ${WHITE}Porta Wuzapi: ---------->> ${YELLOW}${PORT_WUZAPI:-8090}\n"
   printf "   ${WHITE}Porta GoFlow Dispatch: ->> ${YELLOW}${PORT_DISPATCHER:-8095}\n"
-  printf "   ${WHITE}Porta API Oficial: ----->> ${YELLOW}${PORT_APIOFICIAL:-6000}\n"
   if [ -n "${versao_instalacao}" ]; then
     printf "   ${WHITE}Versão Instalada: ------->> ${YELLOW}${versao_instalacao}${WHITE}\n"
     printf "   ${WHITE}Commit Instalado: ------->> ${YELLOW}${commit_instalacao}${WHITE}\n"
@@ -7163,10 +7389,10 @@ selecionar_versao_atualizacao() {
   source "${INSTALADOR_DIR}/tools/carregar_versoes_multiflow_pro.sh" 2>/dev/null || true
 
   if ! mf_repo_usa_menu_versoes "${repo_url:-}" "${empresa:-}"; then
-    declare -g versao_atualizacao="Mais_Recente"
+    selecionar_canal_branch_amanda "a atualização"
+    declare -g versao_atualizacao="${BRANCH_AMANDA_ESCOLHIDA:-Mais_Recente}"
     declare -g commit_atualizacao=""
-    printf "${GREEN} >> Atualização padrão: branch principal do repositório.${WHITE}\n"
-    printf "${YELLOW} >> (Menu de versões só para multiflow-pro — repo atual: ${repo_url:-origem desconhecida})${WHITE}\n"
+    printf "${GREEN} >> Canal selecionado para atualização: ${BLUE}%s${WHITE}\n" "${BRANCH_AMANDA_ESCOLHIDA:-davi-alteracoes}"
     echo
     sleep 1
     return 0
@@ -7260,7 +7486,7 @@ baixa_codigo_base() {
         rm -rf "${dest_dir}"
       fi
       mkdir -p "${dest_dir}"
-      GIT_TERMINAL_PROMPT=0 git clone "${github_url}" "${dest_dir}"
+      GIT_TERMINAL_PROMPT=0 git clone -b davi-alteracoes "${github_url}" "${dest_dir}" 2>/dev/null || GIT_TERMINAL_PROMPT=0 git clone "${github_url}" "${dest_dir}"
       if [ $? -ne 0 ]; then
         echo
         printf "${RED}══════════════════════════════════════════════════════════════════${WHITE}\n"
@@ -7288,31 +7514,48 @@ baixa_codigo_base() {
       
       cd ${dest_dir} || trata_erro "cd para diretório do projeto"
       
-      # Fazer checkout para a branch principal (prioridade: main > davi-alteraçoes > master)
+      # Fazer checkout para a branch principal (prioridade: davi-alteracoes > davi-alteraçoes > main > master)
       sudo su - deploy <<CHECKOUTRECENT
 cd ${dest_dir}
+git config --global --add safe.directory "${dest_dir}" 2>/dev/null || true
 git fetch --all --prune 2>/dev/null || true
 
 # Limpar qualquer modificação residual anterior
+git clean -fdx 2>/dev/null || true
 git checkout -f 2>/dev/null || true
 git reset --hard 2>/dev/null || true
-git clean -fd 2>/dev/null || true
 
-# Tentar fazer checkout e reset para a branch limpa
-if git show-ref --verify --quiet refs/remotes/origin/main; then
-  git checkout -B main origin/main 2>/dev/null || git checkout main 2>/dev/null || true
-  git reset --hard origin/main
-elif git show-ref --verify --quiet refs/remotes/origin/davi-alteraçoes; then
-  git checkout -B davi-alteraçoes origin/davi-alteraçoes 2>/dev/null || true
-  git reset --hard origin/davi-alteraçoes
-elif git show-ref --verify --quiet refs/remotes/origin/master; then
-  git checkout -B master origin/master 2>/dev/null || git checkout master 2>/dev/null || true
-  git reset --hard origin/master
-elif git show-ref --verify --quiet refs/remotes/origin/MULTI100-OFICIAL-u21; then
-  git checkout -B MULTI100-OFICIAL-u21 origin/MULTI100-OFICIAL-u21 2>/dev/null || true
-  git reset --hard origin/MULTI100-OFICIAL-u21
+# Tentar fazer checkout e reset para a branch selecionada (ou com fallback limpo)
+target_br="${BRANCH_AMANDA_ESCOLHIDA:-}"
+if [ -n "${target_br}" ] && git show-ref --verify --quiet "refs/remotes/origin/${target_br}"; then
+  git checkout -f -B "${target_br}" "origin/${target_br}"
+  git reset --hard "origin/${target_br}"
+else
+  _cur_br=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)
+  if [ -n "$_cur_br" ] && [ "$_cur_br" != "HEAD" ] && git show-ref --verify --quiet "refs/remotes/origin/${_cur_br}"; then
+    git checkout -f -B "${_cur_br}" "origin/${_cur_br}"
+    git reset --hard "origin/${_cur_br}"
+  elif git show-ref --verify --quiet refs/remotes/origin/davi-alteracoes; then
+    git checkout -f -B davi-alteracoes origin/davi-alteracoes
+    git reset --hard origin/davi-alteracoes
+  elif git show-ref --verify --quiet refs/remotes/origin/davi-alteraçoes; then
+    git checkout -f -B davi-alteraçoes origin/davi-alteraçoes
+    git reset --hard origin/davi-alteraçoes
+  elif git show-ref --verify --quiet refs/remotes/origin/alan-alteracoes; then
+    git checkout -f -B alan-alteracoes origin/alan-alteracoes
+    git reset --hard origin/alan-alteracoes
+  elif git show-ref --verify --quiet refs/remotes/origin/main; then
+    git checkout -f -B main origin/main
+    git reset --hard origin/main
+  elif git show-ref --verify --quiet refs/remotes/origin/master; then
+    git checkout -f -B master origin/master
+    git reset --hard origin/master
+  elif git show-ref --verify --quiet refs/remotes/origin/MULTI100-OFICIAL-u21; then
+    git checkout -f -B MULTI100-OFICIAL-u21 origin/MULTI100-OFICIAL-u21
+    git reset --hard origin/MULTI100-OFICIAL-u21
+  fi
 fi
-git clean -fd 2>/dev/null || true
+git clean -fdx 2>/dev/null || true
 CHECKOUTRECENT
       
       printf "${GREEN} >> Versão mais recente do repositório será instalada${WHITE}\n"
@@ -8547,7 +8790,23 @@ mf_git_clean_preservando_locais() {
   git clean -fd -e api_transcricao/run_transcricao.sh 2>/dev/null || true
 }
 mf_git_detectar_deploy_branch() {
-  if git show-ref --verify --quiet refs/remotes/origin/main; then
+  if [ -n "${BRANCH_AMANDA_ESCOLHIDA:-}" ] && git show-ref --verify --quiet "refs/remotes/origin/${BRANCH_AMANDA_ESCOLHIDA}"; then
+    printf '%s\n' "${BRANCH_AMANDA_ESCOLHIDA}"
+    return 0
+  fi
+  local _cur_branch
+  _cur_branch=\$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)
+  if [ -n "\$_cur_branch" ] && [ "\$_cur_branch" != "HEAD" ] && git show-ref --verify --quiet "refs/remotes/origin/\${_cur_branch}"; then
+    printf '%s\n' "\$_cur_branch"
+    return 0
+  fi
+  if git show-ref --verify --quiet refs/remotes/origin/davi-alteracoes; then
+    printf '%s\n' davi-alteracoes
+  elif git show-ref --verify --quiet refs/remotes/origin/davi-alteraçoes; then
+    printf '%s\n' davi-alteraçoes
+  elif git show-ref --verify --quiet refs/remotes/origin/alan-alteracoes; then
+    printf '%s\n' alan-alteracoes
+  elif git show-ref --verify --quiet refs/remotes/origin/main; then
     printf '%s\n' main
   elif git show-ref --verify --quiet refs/remotes/origin/master; then
     printf '%s\n' master
@@ -10976,6 +11235,12 @@ fi
 if [ "${1:-}" = "--desinstalar" ]; then
   carregar_variaveis
   menu_desinstalar_plataforma
+  exit 0
+fi
+
+if [ "${1:-}" = "--atualizar" ] || [ "${1:-}" = "atualizar" ] || [ "${1:-}" = "2" ]; then
+  carregar_variaveis
+  atualizar_amanda_docker
   exit 0
 fi
 
