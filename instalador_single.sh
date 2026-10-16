@@ -1253,7 +1253,10 @@ PYEOF
     sleep 2
   fi
 
-  if ! mf_verificar_servicos_criticos_docker "${be_container}" "${oficial_container}"; then
+  local criticos=()
+  [ -n "$be_container" ] && criticos+=("$be_container")
+  [ -n "$oficial_container" ] && criticos+=("$oficial_container")
+  if ! mf_verificar_servicos_criticos_docker "${criticos[@]}"; then
     return 1
   fi
 
@@ -1277,21 +1280,27 @@ PYEOF
 
 # Evita declarar instalação/atualização concluída com backend ou API Oficial reiniciando.
 mf_verificar_servicos_criticos_docker() {
-  local containers=("$@")
+  local containers=()
+  for c in "$@"; do
+    [ -n "$c" ] && containers+=("$c")
+  done
   local container=""
   local state=""
   local falha=0
 
   if [ "${#containers[@]}" -eq 0 ]; then
-    containers=(amanda_backend amanda_apioficial)
+    local default_be
+    default_be=$(docker ps --format '{{.Names}}' | grep -E "backend" | head -n 1)
+    [ -n "$default_be" ] && containers+=("$default_be")
   fi
-  sleep 10
+
+  if [ "${#containers[@]}" -eq 0 ]; then
+    return 0
+  fi
+
+  sleep 5
   for container in "${containers[@]}"; do
-    if [ -z "${container}" ]; then
-      printf "${YELLOW} >> Nome de um container crítico não foi identificado.${WHITE}\n"
-      falha=1
-      continue
-    fi
+    [ -z "${container}" ] && continue
     if ! docker inspect "${container}" >/dev/null 2>&1; then
       printf "${YELLOW} >> Container crítico ${container} não encontrado; verifique o nome no Compose.${WHITE}\n"
       falha=1
@@ -1575,7 +1584,10 @@ PYEOF
     docker exec "$oficial_container" npx prisma db push 2>/dev/null || true
   }
 
-  if ! mf_verificar_servicos_criticos_docker "${be_container}" "${oficial_container}"; then
+  local criticos=()
+  [ -n "$be_container" ] && criticos+=("$be_container")
+  [ -n "$oficial_container" ] && criticos+=("$oficial_container")
+  if ! mf_verificar_servicos_criticos_docker "${criticos[@]}"; then
     return 1
   fi
 
