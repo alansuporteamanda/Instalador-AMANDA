@@ -49,10 +49,19 @@ sistema_resolver_empresa() {
   ARQUIVO_VARIAVEIS="VARIAVEIS_INSTALACAO"
 
   if [ -n "$emp_arg" ]; then
+    # Garantir symlinks se a estrutura com subpasta amanda/ estiver presente
+    if [ -d "/home/deploy/${emp_arg}/amanda/backend" ] && [ ! -d "/home/deploy/${emp_arg}/backend" ]; then
+      ln -sfn "/home/deploy/${emp_arg}/amanda/backend" "/home/deploy/${emp_arg}/backend" 2>/dev/null || true
+      ln -sfn "/home/deploy/${emp_arg}/amanda/frontend" "/home/deploy/${emp_arg}/frontend" 2>/dev/null || true
+      [ -d "/home/deploy/${emp_arg}/amanda/wuzapi" ] && ln -sfn "/home/deploy/${emp_arg}/amanda/wuzapi" "/home/deploy/${emp_arg}/wuzapi" 2>/dev/null || true
+      [ -d "/home/deploy/${emp_arg}/amanda/goflow_dispatcher" ] && ln -sfn "/home/deploy/${emp_arg}/amanda/goflow_dispatcher" "/home/deploy/${emp_arg}/goflow_dispatcher" 2>/dev/null || true
+      [ -d "/home/deploy/${emp_arg}/amanda/api_transcricao" ] && ln -sfn "/home/deploy/${emp_arg}/amanda/api_transcricao" "/home/deploy/${emp_arg}/api_transcricao" 2>/dev/null || true
+    fi
+
     if [ -f "${INSTALADOR_DIR}/VARIAVEIS_INSTALACAO" ]; then
       # shellcheck source=/dev/null
       source "${INSTALADOR_DIR}/VARIAVEIS_INSTALACAO" 2>/dev/null
-      if [ "${empresa:-}" = "$emp_arg" ] && [ -d "/home/deploy/${emp_arg}/backend" ]; then
+      if [ "${empresa:-}" = "$emp_arg" ] && { [ -d "/home/deploy/${emp_arg}/backend" ] || [ -d "/home/deploy/${emp_arg}/amanda/backend" ]; }; then
         declare -g ARQUIVO_VARIAVEIS_USADO="${INSTALADOR_DIR}/VARIAVEIS_INSTALACAO"
         empresa="$emp_arg"
         return 0
@@ -60,14 +69,14 @@ sistema_resolver_empresa() {
     fi
     shopt -s nullglob
     local arq
-    for arq in "${INSTALADOR_DIR}"/VARIAVEIS_INSTALACAO_INSTANCIA_*; do
+    for arq in "${INSTALADOR_DIR}"/VARIAVEIS_INSTALACAO_INSTANCIA_* /root/VARIAVEIS_INSTALACAO_INSTANCIA_*; do
       [ -f "$arq" ] || continue
       case "$arq" in
         *.backup*|*.bak*|*.old*) continue ;;
       esac
       local e2
       e2=$(grep -m1 '^empresa=' "$arq" 2>/dev/null | cut -d '=' -f2- | tr -d '\r')
-      if [ "$e2" = "$emp_arg" ] && [ -d "/home/deploy/${emp_arg}/backend" ]; then
+      if [ "$e2" = "$emp_arg" ] && { [ -d "/home/deploy/${emp_arg}/backend" ] || [ -d "/home/deploy/${emp_arg}/amanda/backend" ]; }; then
         declare -g ARQUIVO_VARIAVEIS_USADO="$arq"
         # shellcheck source=/dev/null
         source "$arq" 2>/dev/null
@@ -77,9 +86,14 @@ sistema_resolver_empresa() {
       fi
     done
     shopt -u nullglob
-    if [ -d "/home/deploy/${emp_arg}/backend" ]; then
+    if [ -d "/home/deploy/${emp_arg}/backend" ] || [ -d "/home/deploy/${emp_arg}/amanda/backend" ] || [ -d "/home/deploy/${emp_arg}" ]; then
       empresa="$emp_arg"
       declare -g ARQUIVO_VARIAVEIS_USADO=""
+      if [ -f "/root/VARIAVEIS_INSTALACAO_INSTANCIA_${emp_arg}" ]; then
+        ARQUIVO_VARIAVEIS_USADO="/root/VARIAVEIS_INSTALACAO_INSTANCIA_${emp_arg}"
+      elif [ -f "${INSTALADOR_DIR}/VARIAVEIS_INSTALACAO_INSTANCIA_${emp_arg}" ]; then
+        ARQUIVO_VARIAVEIS_USADO="${INSTALADOR_DIR}/VARIAVEIS_INSTALACAO_INSTANCIA_${emp_arg}"
+      fi
       return 0
     fi
     printf "${RED} >> Instância '${emp_arg}' não encontrada em /home/deploy.${WHITE}\n"
@@ -205,7 +219,7 @@ detectar_instancias_instaladas() {
     source "${INSTALADOR_DIR}/${ARQUIVO_VARIAVEIS}" 2>/dev/null
     temp_empresa="${empresa:-}"
     
-    if [ -n "${temp_empresa}" ] && [ -d "/home/deploy/${temp_empresa}" ] && [ -d "/home/deploy/${temp_empresa}/backend" ]; then
+    if [ -n "${temp_empresa}" ] && [ -d "/home/deploy/${temp_empresa}" ] && { [ -d "/home/deploy/${temp_empresa}/backend" ] || [ -d "/home/deploy/${temp_empresa}/amanda/backend" ]; }; then
       instancias+=("${INSTALADOR_DIR}/${ARQUIVO_VARIAVEIS}")
       nomes_empresas+=("${temp_empresa}")
     fi
@@ -217,25 +231,24 @@ detectar_instancias_instaladas() {
   fi
   
   # Verificar instâncias adicionais (arquivos VARIAVEIS_INSTALACAO_INSTANCIA_*)
-  if [ -d "${INSTALADOR_DIR}" ]; then
-    for arquivo_instancia in "${INSTALADOR_DIR}"/VARIAVEIS_INSTALACAO_INSTANCIA_*; do
-      if [ -f "$arquivo_instancia" ]; then
-        case "$arquivo_instancia" in
-          *.backup*|*.bak*|*.old*) continue ;;
-        esac
-        # Salvar variáveis atuais
-        local empresa_original="${empresa:-}"
-        local subdominio_backend_original="${subdominio_backend:-}"
-        local subdominio_frontend_original="${subdominio_frontend:-}"
-        
-        # Carregar variáveis do arquivo
-        source "$arquivo_instancia" 2>/dev/null
-        temp_empresa="${empresa:-}"
-        
-        if [ -n "${temp_empresa}" ] && [ -d "/home/deploy/${temp_empresa}" ] && [ -d "/home/deploy/${temp_empresa}/backend" ]; then
-          instancias+=("$arquivo_instancia")
-          nomes_empresas+=("${temp_empresa}")
-        fi
+  for arquivo_instancia in "${INSTALADOR_DIR}"/VARIAVEIS_INSTALACAO_INSTANCIA_* /root/VARIAVEIS_INSTALACAO_INSTANCIA_*; do
+    if [ -f "$arquivo_instancia" ]; then
+      case "$arquivo_instancia" in
+        *.backup*|*.bak*|*.old*) continue ;;
+      esac
+      # Salvar variáveis atuais
+      local empresa_original="${empresa:-}"
+      local subdominio_backend_original="${subdominio_backend:-}"
+      local subdominio_frontend_original="${subdominio_frontend:-}"
+      
+      # Carregar variáveis do arquivo
+      source "$arquivo_instancia" 2>/dev/null
+      temp_empresa="${empresa:-}"
+      
+      if [ -n "${temp_empresa}" ] && [ -d "/home/deploy/${temp_empresa}" ] && { [ -d "/home/deploy/${temp_empresa}/backend" ] || [ -d "/home/deploy/${temp_empresa}/amanda/backend" ]; }; then
+        instancias+=("$arquivo_instancia")
+        nomes_empresas+=("${temp_empresa}")
+      fi
         
         # Restaurar variáveis originais
         empresa="${empresa_original}"
@@ -1144,6 +1157,14 @@ baixa_codigo_atualizar() {
   chown deploy -R /home/deploy/${empresa}
   chmod 775 -R /home/deploy/${empresa}
 
+  if [ -d "/home/deploy/${empresa}/amanda/backend" ] && [ ! -d "/home/deploy/${empresa}/backend" ]; then
+    ln -sfn "/home/deploy/${empresa}/amanda/backend" "/home/deploy/${empresa}/backend" 2>/dev/null || true
+    ln -sfn "/home/deploy/${empresa}/amanda/frontend" "/home/deploy/${empresa}/frontend" 2>/dev/null || true
+    [ -d "/home/deploy/${empresa}/amanda/wuzapi" ] && ln -sfn "/home/deploy/${empresa}/amanda/wuzapi" "/home/deploy/${empresa}/wuzapi" 2>/dev/null || true
+    [ -d "/home/deploy/${empresa}/amanda/goflow_dispatcher" ] && ln -sfn "/home/deploy/${empresa}/amanda/goflow_dispatcher" "/home/deploy/${empresa}/goflow_dispatcher" 2>/dev/null || true
+    [ -d "/home/deploy/${empresa}/amanda/api_transcricao" ] && ln -sfn "/home/deploy/${empresa}/amanda/api_transcricao" "/home/deploy/${empresa}/api_transcricao" 2>/dev/null || true
+  fi
+
   sleep 2
 
   # printf "${WHITE} >> Parando Instancias... \n"
@@ -1329,6 +1350,14 @@ ${MF_SQLITE_CHECK_BODY}
 printf "${WHITE} >> Código já sincronizado; seguindo com build (FAST)...\n"
 echo
 cd /home/deploy/${empresa}
+
+if [ -d "/home/deploy/${empresa}/amanda/backend" ] && [ ! -d "/home/deploy/${empresa}/backend" ]; then
+  ln -sfn "/home/deploy/${empresa}/amanda/backend" "/home/deploy/${empresa}/backend" 2>/dev/null || true
+  ln -sfn "/home/deploy/${empresa}/amanda/frontend" "/home/deploy/${empresa}/frontend" 2>/dev/null || true
+  [ -d "/home/deploy/${empresa}/amanda/wuzapi" ] && ln -sfn "/home/deploy/${empresa}/amanda/wuzapi" "/home/deploy/${empresa}/wuzapi" 2>/dev/null || true
+  [ -d "/home/deploy/${empresa}/amanda/goflow_dispatcher" ] && ln -sfn "/home/deploy/${empresa}/amanda/goflow_dispatcher" "/home/deploy/${empresa}/goflow_dispatcher" 2>/dev/null || true
+  [ -d "/home/deploy/${empresa}/amanda/api_transcricao" ] && ln -sfn "/home/deploy/${empresa}/amanda/api_transcricao" "/home/deploy/${empresa}/api_transcricao" 2>/dev/null || true
+fi
 
 if [ -d "/home/deploy/${empresa}/api_transcricao" ] && [ -f "/home/deploy/${empresa}/api_transcricao/main.py" ]; then
   main_py_transc="/home/deploy/${empresa}/api_transcricao/main.py"

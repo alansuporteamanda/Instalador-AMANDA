@@ -79,7 +79,7 @@ detectar_instancias_instaladas() {
     source "${INSTALADOR_DIR}/${ARQUIVO_VARIAVEIS}" 2>/dev/null
     temp_empresa="${empresa:-}"
     
-    if [ -n "${temp_empresa}" ] && [ -d "/home/deploy/${temp_empresa}" ] && [ -d "/home/deploy/${temp_empresa}/backend" ]; then
+    if [ -n "${temp_empresa}" ] && [ -d "/home/deploy/${temp_empresa}" ] && { [ -d "/home/deploy/${temp_empresa}/backend" ] || [ -d "/home/deploy/${temp_empresa}/amanda/backend" ]; }; then
       instancias+=("${INSTALADOR_DIR}/${ARQUIVO_VARIAVEIS}")
       nomes_empresas+=("${temp_empresa}")
     fi
@@ -91,34 +91,32 @@ detectar_instancias_instaladas() {
   fi
   
   # Verificar instâncias adicionais (arquivos VARIAVEIS_INSTALACAO_INSTANCIA_*)
-  if [ -d "${INSTALADOR_DIR}" ]; then
-    for arquivo_instancia in "${INSTALADOR_DIR}"/VARIAVEIS_INSTALACAO_INSTANCIA_*; do
-      if [ -f "$arquivo_instancia" ]; then
-        # Ignorar backups (ex.: VARIAVEIS_..._web.backup.20260928_...)
-        case "$arquivo_instancia" in
-          *.backup*|*.bak*|*.old*) continue ;;
-        esac
-        # Salvar variáveis atuais
-        local empresa_original="${empresa:-}"
-        local subdominio_backend_original="${subdominio_backend:-}"
-        local subdominio_frontend_original="${subdominio_frontend:-}"
-        
-        # Carregar variáveis do arquivo
-        source "$arquivo_instancia" 2>/dev/null
-        temp_empresa="${empresa:-}"
-        
-        if [ -n "${temp_empresa}" ] && [ -d "/home/deploy/${temp_empresa}" ] && [ -d "/home/deploy/${temp_empresa}/backend" ]; then
-          instancias+=("$arquivo_instancia")
-          nomes_empresas+=("${temp_empresa}")
-        fi
-        
-        # Restaurar variáveis originais
-        empresa="${empresa_original}"
-        subdominio_backend="${subdominio_backend_original}"
-        subdominio_frontend="${subdominio_frontend_original}"
+  for arquivo_instancia in "${INSTALADOR_DIR}"/VARIAVEIS_INSTALACAO_INSTANCIA_* /root/VARIAVEIS_INSTALACAO_INSTANCIA_*; do
+    if [ -f "$arquivo_instancia" ]; then
+      # Ignorar backups (ex.: VARIAVEIS_..._web.backup.20260928_...)
+      case "$arquivo_instancia" in
+        *.backup*|*.bak*|*.old*) continue ;;
+      esac
+      # Salvar variáveis atuais
+      local empresa_original="${empresa:-}"
+      local subdominio_backend_original="${subdominio_backend:-}"
+      local subdominio_frontend_original="${subdominio_frontend:-}"
+      
+      # Carregar variáveis do arquivo
+      source "$arquivo_instancia" 2>/dev/null
+      temp_empresa="${empresa:-}"
+      
+      if [ -n "${temp_empresa}" ] && [ -d "/home/deploy/${temp_empresa}" ] && { [ -d "/home/deploy/${temp_empresa}/backend" ] || [ -d "/home/deploy/${temp_empresa}/amanda/backend" ]; }; then
+        instancias+=("$arquivo_instancia")
+        nomes_empresas+=("${temp_empresa}")
       fi
-    done
-  fi
+      
+      # Restaurar variáveis originais
+      empresa="${empresa_original}"
+      subdominio_backend="${subdominio_backend_original}"
+      subdominio_frontend="${subdominio_frontend_original}"
+    fi
+  done
 
   # Retornar arrays (usando variáveis globais)
   declare -g INSTANCIAS_DETECTADAS=("${instancias[@]}")
@@ -1054,6 +1052,17 @@ baixa_codigo_atualizar() {
 
   carregar_credenciais_instancia
 
+  chown deploy -R /home/deploy/${empresa} 2>/dev/null || true
+  chmod 775 -R /home/deploy/${empresa} 2>/dev/null || true
+
+  if [ -d "/home/deploy/${empresa}/amanda/backend" ] && [ ! -d "/home/deploy/${empresa}/backend" ]; then
+    ln -sfn "/home/deploy/${empresa}/amanda/backend" "/home/deploy/${empresa}/backend" 2>/dev/null || true
+    ln -sfn "/home/deploy/${empresa}/amanda/frontend" "/home/deploy/${empresa}/frontend" 2>/dev/null || true
+    [ -d "/home/deploy/${empresa}/amanda/wuzapi" ] && ln -sfn "/home/deploy/${empresa}/amanda/wuzapi" "/home/deploy/${empresa}/wuzapi" 2>/dev/null || true
+    [ -d "/home/deploy/${empresa}/amanda/goflow_dispatcher" ] && ln -sfn "/home/deploy/${empresa}/amanda/goflow_dispatcher" "/home/deploy/${empresa}/goflow_dispatcher" 2>/dev/null || true
+    [ -d "/home/deploy/${empresa}/amanda/api_transcricao" ] && ln -sfn "/home/deploy/${empresa}/amanda/api_transcricao" "/home/deploy/${empresa}/api_transcricao" 2>/dev/null || true
+  fi
+
   if [ ! -f "/home/deploy/${empresa}/backend/.env" ]; then
     printf "${RED} >> ERRO: backend/.env não encontrado em /home/deploy/${empresa}/backend/.env${WHITE}\n"
     printf "${YELLOW} >> Sem o .env a atualização quebra (DB, Redis, JWT). Restaure o arquivo e rode de novo.${WHITE}\n"
@@ -1234,6 +1243,14 @@ ${MF_SQLITE_CHECK_BODY}
 printf "${WHITE} >> Código já sincronizado; seguindo com build (FAST)...\n"
 echo
 cd /home/deploy/${empresa}
+
+if [ -d "/home/deploy/${empresa}/amanda/backend" ] && [ ! -d "/home/deploy/${empresa}/backend" ]; then
+  ln -sfn "/home/deploy/${empresa}/amanda/backend" "/home/deploy/${empresa}/backend" 2>/dev/null || true
+  ln -sfn "/home/deploy/${empresa}/amanda/frontend" "/home/deploy/${empresa}/frontend" 2>/dev/null || true
+  [ -d "/home/deploy/${empresa}/amanda/wuzapi" ] && ln -sfn "/home/deploy/${empresa}/amanda/wuzapi" "/home/deploy/${empresa}/wuzapi" 2>/dev/null || true
+  [ -d "/home/deploy/${empresa}/amanda/goflow_dispatcher" ] && ln -sfn "/home/deploy/${empresa}/amanda/goflow_dispatcher" "/home/deploy/${empresa}/goflow_dispatcher" 2>/dev/null || true
+  [ -d "/home/deploy/${empresa}/amanda/api_transcricao" ] && ln -sfn "/home/deploy/${empresa}/amanda/api_transcricao" "/home/deploy/${empresa}/api_transcricao" 2>/dev/null || true
+fi
 
 if [ -d "/home/deploy/${empresa}/api_transcricao" ] && [ -f "/home/deploy/${empresa}/api_transcricao/main.py" ]; then
   main_py_transc="/home/deploy/${empresa}/api_transcricao/main.py"
