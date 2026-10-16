@@ -947,14 +947,17 @@ instalar_amanda_docker_stack() {
   echo
   sleep 1
 
-  carregar_variaveis
-  questoes_dns_base || trata_erro "questoes_dns_base"
-  verificar_dns_base || trata_erro "verificar_dns_base"
-  questoes_variaveis_base || trata_erro "questoes_variaveis_base"
-  define_proxy_base || trata_erro "define_proxy_base"
-  define_portas_base || trata_erro "define_portas_base"
-  confirma_dados_instalacao_base || trata_erro "confirma_dados_instalacao_base"
-  salvar_variaveis || trata_erro "salvar_variaveis"
+  if [ "${DADOS_COLETADOS_NOVA_INSTANCIA:-0}" != "1" ]; then
+    carregar_variaveis
+    questoes_dns_base || trata_erro "questoes_dns_base"
+    verificar_dns_base || trata_erro "verificar_dns_base"
+    questoes_variaveis_base || trata_erro "questoes_variaveis_base"
+    define_proxy_base || trata_erro "define_proxy_base"
+    define_portas_base || trata_erro "define_portas_base"
+    confirma_dados_instalacao_base || trata_erro "confirma_dados_instalacao_base"
+    salvar_variaveis || trata_erro "salvar_variaveis"
+  fi
+  export DADOS_COLETADOS_NOVA_INSTANCIA=0
 
   atualiza_vps_base || trata_erro "atualiza_vps_base"
   cria_deploy_base || trata_erro "cria_deploy_base"
@@ -999,7 +1002,7 @@ EMPRESA=${empresa:-amanda}
 NODE_ENV=production
 BACKEND_URL=${subdominio_backend}
 FRONTEND_URL=${subdominio_frontend}
-URL_API_OFICIAL=
+URL_API_OFICIAL=${subdominio_oficial:-}
 PORT_BACKEND=${backend_port:-8080}
 PORT_FRONTEND=${frontend_port:-3000}
 PORT_DB=${PORT_DB:-5432}
@@ -1013,17 +1016,23 @@ DB_USER=${empresa:-amanda}
 DB_PASS=${senha_deploy:-Acertitech13@}
 DB_NAME=${empresa:-amanda}
 DB_NAME_APIOFICIAL=api_oficial
+REDIS_URI_ACK=redis://redis:6379
 
 JWT_SECRET=${jwt_secret}
 JWT_REFRESH_SECRET=${jwt_refresh_secret}
 MASTER_KEY=${senha_master}
 
+FACEBOOK_APP_ID=${facebook_app_id:-}
+FACEBOOK_APP_SECRET=${facebook_app_secret:-}
+
 WUZAPI_ADMIN_TOKEN=adminpro123
+WUZAPI_TOKEN=adminpro123
+WUZAPI_WEBHOOK_BASE_URL=http://backend:8080
 WUZAPI_GLOBAL_ENCRYPTION_KEY=mF9vK2xQ8zP4wR6tY1uI3oA5sD7fG0hJ
 WUZAPI_GLOBAL_HMAC_KEY=kH3jL5mN7pQ9rT1vX3zB5dF7gJ9lO1qS
 
 USE_WHATSAPP_OFICIAL=false
-TOKEN_API_OFICIAL="adminpro"
+TOKEN_API_OFICIAL=adminpro
 USE_GO_CAMPAIGN_DISPATCHER=true
 TRANSCRIBE_URL=http://api_transcricao:4002
 EOF
@@ -1463,8 +1472,8 @@ atualizar_amanda_docker() {
   printf "${PURPLE} >> Sincronizando com o repositório oficial (branch ${BRANCH_AMANDA_ESCOLHIDA})...${WHITE}\n"
   echo
 
-  cd "${app_dir}" || cd "${compose_dir}" || trata_erro "cd para diretorio da instalacao"
-  git config --global --add safe.directory "${app_dir}" 2>/dev/null || true
+  cd "${repo_dir}" || cd "${app_dir}" || cd "${compose_dir}" || trata_erro "cd para diretorio da instalacao"
+  git config --global --add safe.directory "${repo_dir}" 2>/dev/null || true
   git fetch --all --prune 2>/dev/null || true
   git clean -fd -e .env -e "*/.env" -e ssl 2>/dev/null || true
   git checkout -f 2>/dev/null || true
@@ -1499,7 +1508,7 @@ EMPRESA=${empresa:-amanda}
 NODE_ENV=production
 BACKEND_URL=${subdominio_backend}
 FRONTEND_URL=${subdominio_frontend}
-URL_API_OFICIAL=${subdominio_api_oficial:-}
+URL_API_OFICIAL=${subdominio_oficial:-${subdominio_api_oficial:-}}
 PORT_BACKEND=${backend_port:-8080}
 PORT_FRONTEND=${frontend_port:-3000}
 PORT_DB=${PORT_DB:-5432}
@@ -1513,17 +1522,23 @@ DB_USER=${empresa:-amanda}
 DB_PASS=${senha_deploy:-Acertitech13@}
 DB_NAME=${empresa:-amanda}
 DB_NAME_APIOFICIAL=api_oficial
+REDIS_URI_ACK=redis://redis:6379
 
 JWT_SECRET=${jwt_secret}
 JWT_REFRESH_SECRET=${jwt_refresh_secret}
 MASTER_KEY=${senha_master}
 
+FACEBOOK_APP_ID=${facebook_app_id:-}
+FACEBOOK_APP_SECRET=${facebook_app_secret:-}
+
 WUZAPI_ADMIN_TOKEN=adminpro123
+WUZAPI_TOKEN=adminpro123
+WUZAPI_WEBHOOK_BASE_URL=http://backend:8080
 WUZAPI_GLOBAL_ENCRYPTION_KEY=mF9vK2xQ8zP4wR6tY1uI3oA5sD7fG0hJ
 WUZAPI_GLOBAL_HMAC_KEY=kH3jL5mN7pQ9rT1vX3zB5dF7gJ9lO1qS
 
 USE_WHATSAPP_OFICIAL=false
-TOKEN_API_OFICIAL="adminpro"
+TOKEN_API_OFICIAL=adminpro
 USE_GO_CAMPAIGN_DISPATCHER=true
 TRANSCRIBE_URL=http://api_transcricao:4002
 EOF
@@ -1566,8 +1581,7 @@ PYEOF
   fi
 
   docker compose -p "${empresa:-amanda}" pull 2>/dev/null || true
-  docker compose -p "${empresa:-amanda}" build frontend backend
-  docker compose -p "${empresa:-amanda}" up -d --build --force-recreate frontend backend
+  docker compose -p "${empresa:-amanda}" up -d --build --force-recreate backend frontend api_transcricao goflow_dispatcher
 
   # Localizar contêineres dinamicamente para esta empresa
   local be_container oficial_container
@@ -1987,9 +2001,9 @@ iniciar_instalacao_nova_instancia() {
   define_proxy_base || trata_erro "define_proxy_base"
   define_portas_base || trata_erro "define_portas_base"
   confirma_dados_instalacao_base || trata_erro "confirma_dados_instalacao_base"
-  questoes_otimizacao_nativa || trata_erro "questoes_otimizacao_nativa"
   salvar_variaveis || trata_erro "salvar_variaveis"
   salvar_etapa 1
+  export DADOS_COLETADOS_NOVA_INSTANCIA=1
 
   # Executa a stack de instalação Docker 100% isolada
   instalar_amanda_docker_stack
@@ -4936,8 +4950,7 @@ desinstalar_amanda_preservando_dados() {
   fi
 
   if [ $outras_plataformas -eq 0 ]; then
-    printf "${WHITE} >> Nenhuma outra plataforma restante em /home/deploy. Removendo pasta /home/deploy...${WHITE}\n"
-    sudo rm -rf /home/deploy
+    printf "${GREEN} >> Plataforma ${empresa_alvo} removida de /home/deploy (diretório /home/deploy/backups preservado).${WHITE}\n"
   else
     printf "${GREEN} >> Plataforma ${empresa_alvo} removida de /home/deploy. Demais plataformas preservadas.${WHITE}\n"
   fi
@@ -5118,8 +5131,7 @@ desinstalar_amanda_apagando_dados() {
   fi
 
   if [ $outras_plataformas -eq 0 ]; then
-    printf "${RED} >> Nenhuma outra plataforma detectada em /home/deploy. Removendo pasta completa /home/deploy...${WHITE}\n"
-    sudo rm -rf /home/deploy
+    printf "${GREEN} >> Plataforma ${empresa_alvo} removida de /home/deploy (diretório /home/deploy/backups preservado).${WHITE}\n"
   else
     printf "${GREEN} >> Plataforma ${empresa_alvo} removida de /home/deploy. Demais plataformas preservadas.${WHITE}\n"
   fi
@@ -6027,6 +6039,11 @@ define_portas_base() {
   fi
 
   export backend_port frontend_port
+  if [ "${INSTALACAO_SEM_DOMINIO:-0}" = "1" ]; then
+    subdominio_backend=$(echo "${subdominio_backend}" | sed -E "s/:[0-9]+$/:${backend_port}/")
+    subdominio_frontend=$(echo "${subdominio_frontend}" | sed -E "s/:[0-9]+$/:${frontend_port}/")
+    export subdominio_backend subdominio_frontend
+  fi
 
   # Recalcular resolução automática das portas internas com backend e frontend definidos
   resolver_portas_automaticas 1 >/dev/null 2>&1 || true
