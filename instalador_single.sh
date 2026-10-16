@@ -5287,19 +5287,15 @@ questoes_variaveis_base() {
   read -p "> " email_deploy
   echo
   # DEFINE NOME DA EMPRESA
-  if [ -z "${empresa:-}" ]; then
-    banner
-    printf "${WHITE} >> Digite o nome da sua empresa (Letras minusculas e sem espaço) [padrão: amanda]: \n"
-    echo
-    read -p "> " empresa
-    empresa="${empresa:-amanda}"
-    empresa=$(echo "$empresa" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9_-')
-    echo
-  else
-    banner
-    printf "${WHITE} >> Empresa definida: ${GREEN}%s${WHITE}\n\n" "$empresa"
-    sleep 1
-  fi
+  banner
+  local emp_padrao="${empresa:-amanda}"
+  printf "${WHITE} >> Digite o nome da sua empresa (Letras minusculas e sem espaço) [padrão: ${GREEN}%s${WHITE}]: \n" "$emp_padrao"
+  echo
+  read -p "> " input_empresa
+  empresa="${input_empresa:-$emp_padrao}"
+  empresa=$(echo "$empresa" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9_-')
+  [ -z "$empresa" ] && empresa="amanda"
+  echo
   # DEFINE SENHA BASE
   banner
   printf "${WHITE} >> Insira a senha para o usuario Deploy, Redis e Banco de Dados [padrão: Acertitech13@]: \n"
