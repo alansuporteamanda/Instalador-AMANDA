@@ -250,13 +250,12 @@ detectar_instancias_instaladas() {
         nomes_empresas+=("${temp_empresa}")
       fi
         
-        # Restaurar variáveis originais
-        empresa="${empresa_original}"
-        subdominio_backend="${subdominio_backend_original}"
-        subdominio_frontend="${subdominio_frontend_original}"
-      fi
-    done
-  fi
+      # Restaurar variáveis originais
+      empresa="${empresa_original}"
+      subdominio_backend="${subdominio_backend_original}"
+      subdominio_frontend="${subdominio_frontend_original}"
+    fi
+  done
   
   # Retornar arrays (usando variáveis globais)
   declare -g INSTANCIAS_DETECTADAS=("${instancias[@]}")
