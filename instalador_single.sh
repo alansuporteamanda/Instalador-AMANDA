@@ -1140,6 +1140,16 @@ PYEOF
     git checkout -f docker-compose.yml 2>/dev/null || true
   fi
 
+  # Assegurar Dockerfiles auxiliares e tagueamento inicial das imagens com o nome da empresa
+  [ -f "${compose_dir}/postgres/Dockerfile" ] || (mkdir -p "${compose_dir}/postgres" && echo "FROM postgres:17" > "${compose_dir}/postgres/Dockerfile")
+  [ -f "${compose_dir}/redis/Dockerfile" ] || (mkdir -p "${compose_dir}/redis" && echo "FROM redis:7.4-alpine" > "${compose_dir}/redis/Dockerfile")
+  [ -f "${compose_dir}/pgbouncer/Dockerfile" ] || (mkdir -p "${compose_dir}/pgbouncer" && echo "FROM edoburu/pgbouncer:1.21.0-p2" > "${compose_dir}/pgbouncer/Dockerfile")
+  [ -f "${compose_dir}/wuzapi/Dockerfile.official" ] || (mkdir -p "${compose_dir}/wuzapi" && echo "FROM asternic/wuzapi:latest" > "${compose_dir}/wuzapi/Dockerfile.official")
+  docker image inspect postgres:17 >/dev/null 2>&1 && docker tag postgres:17 "${proj_name}_postgres:17" 2>/dev/null || true
+  docker image inspect redis:7.4-alpine >/dev/null 2>&1 && docker tag redis:7.4-alpine "${proj_name}_redis:7.4-alpine" 2>/dev/null || true
+  docker image inspect edoburu/pgbouncer:1.21.0-p2 >/dev/null 2>&1 && docker tag edoburu/pgbouncer:1.21.0-p2 "${proj_name}_pgbouncer:1.21.0-p2" 2>/dev/null || true
+  docker image inspect asternic/wuzapi:latest >/dev/null 2>&1 && docker tag asternic/wuzapi:latest "${proj_name}_wuzapi:latest" 2>/dev/null || true
+
   limpar_conteineres_conflitantes "${compose_dir}" "${proj_name}"
   resolver_portas_automaticas
   sincronizar_todas_portas_env "${compose_dir}/.env"
