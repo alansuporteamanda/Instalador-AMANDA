@@ -970,6 +970,9 @@ instalar_amanda_docker_stack() {
   limpar_conteineres_conflitantes "/home/deploy/${proj_name}" "${proj_name}"
   resolver_portas_automaticas
 
+  # Selecionar canal/branch da AMANDA (Estável vs Dev)
+  selecionar_canal_branch_amanda "a instalação"
+
   # Instalar Git e baixar o repositório
   instala_git_base || trata_erro "instala_git_base"
   codifica_clone_base || trata_erro "codifica_clone_base"
@@ -1269,6 +1272,45 @@ PYEOF
 }
 
 # ================================================================
+# SELEÇÃO DE CANAL / BRANCH AMANDA (Estável vs Desenvolvimento)
+# ================================================================
+selecionar_canal_branch_amanda() {
+  local motivo="${1:-a atualização}"
+  banner
+  printf "   ${PURPLE}╔══════════════════════════════════════════════════════════════╗${WHITE}\n"
+  printf "   ${PURPLE}║${WHITE}           SELEÇÃO DE CANAL DE VERSÃO / BRANCH AMANDA         ${PURPLE}║${WHITE}\n"
+  printf "   ${PURPLE}╚══════════════════════════════════════════════════════════════╝${WHITE}\n\n"
+  printf "   ${WHITE}Escolha qual versão/branch você deseja utilizar para ${motivo}:${WHITE}\n\n"
+  printf "   [${BLUE}1${WHITE}] ${GREEN}Versão Estável (main)${WHITE} - Recomendada para Produção / Clientes\n"
+  printf "   [${BLUE}2${WHITE}] ${YELLOW}Versão de Desenvolvimento (davi-alteracoes)${WHITE} - Correções e recursos recentes\n"
+  printf "   [${BLUE}3${WHITE}] ${PURPLE}Versão de Desenvolvimento (alan-alteracoes)${WHITE} - Recursos em homologação\n"
+  printf "   [${BLUE}4${WHITE}] ${CYAN}Personalizada${WHITE} - Digitar o nome de outra branch específica\n\n"
+  printf "   ${WHITE}Digite a opção desejada [1-4] (Padrão: 1): ${PURPLE}"
+  read -r opt_branch
+  opt_branch="${opt_branch:-1}"
+
+  case "${opt_branch}" in
+    2)
+      BRANCH_AMANDA_ESCOLHIDA="davi-alteracoes"
+      ;;
+    3)
+      BRANCH_AMANDA_ESCOLHIDA="alan-alteracoes"
+      ;;
+    4)
+      printf "\n   ${WHITE}Digite o nome exato da branch remota: ${PURPLE}"
+      read -r BRANCH_AMANDA_ESCOLHIDA
+      [ -z "${BRANCH_AMANDA_ESCOLHIDA}" ] && BRANCH_AMANDA_ESCOLHIDA="main"
+      ;;
+    *)
+      BRANCH_AMANDA_ESCOLHIDA="main"
+      ;;
+  esac
+
+  printf "\n   ${GREEN}>> Canal selecionado: ${BLUE}%s${WHITE}\n\n" "${BRANCH_AMANDA_ESCOLHIDA}"
+  sleep 1
+}
+
+# ================================================================
 # ATUALIZAÇÃO DOCKER COMPOSE AMANDA
 # ================================================================
 atualizar_amanda_docker() {
@@ -1287,8 +1329,11 @@ atualizar_amanda_docker() {
   confirm_upd=$(echo "${confirm_upd}" | tr '[:lower:]' '[:upper:]')
   [ "$confirm_upd" != "S" ] && return 0
 
+  # Selecionar canal/branch desejado
+  selecionar_canal_branch_amanda "a atualização"
+
   banner
-  printf "${PURPLE} >> Sincronizando com o repositório oficial (branch davi-alteracoes)...${WHITE}\n"
+  printf "${PURPLE} >> Sincronizando com o repositório oficial (branch ${BRANCH_AMANDA_ESCOLHIDA})...${WHITE}\n"
   echo
 
   cd "${app_dir}" || cd "${compose_dir}" || trata_erro "cd para diretorio da instalacao"
@@ -1297,15 +1342,18 @@ atualizar_amanda_docker() {
   git clean -fdx 2>/dev/null || true
   git checkout -f 2>/dev/null || true
   git reset --hard 2>/dev/null || true
-  if git show-ref --verify --quiet refs/remotes/origin/davi-alteracoes; then
-    git checkout -f -B davi-alteracoes origin/davi-alteracoes
-    git reset --hard origin/davi-alteracoes
-  elif git show-ref --verify --quiet refs/remotes/origin/davi-alteraçoes; then
-    git checkout -f -B davi-alteraçoes origin/davi-alteraçoes
-    git reset --hard origin/davi-alteraçoes
-  else
+
+  if git show-ref --verify --quiet "refs/remotes/origin/${BRANCH_AMANDA_ESCOLHIDA}"; then
+    git checkout -f -B "${BRANCH_AMANDA_ESCOLHIDA}" "origin/${BRANCH_AMANDA_ESCOLHIDA}"
+    git reset --hard "origin/${BRANCH_AMANDA_ESCOLHIDA}"
+    printf "${GREEN} >> Sincronizado com sucesso na branch: ${BRANCH_AMANDA_ESCOLHIDA}${WHITE}\n"
+  elif git show-ref --verify --quiet refs/remotes/origin/main; then
+    printf "${YELLOW} >> Aviso: Branch '${BRANCH_AMANDA_ESCOLHIDA}' não encontrada no origin. Sincronizando com a branch main...${WHITE}\n"
     git checkout -f -B main origin/main
     git reset --hard origin/main
+  else
+    git checkout -f -B master origin/master
+    git reset --hard origin/master
   fi
   git clean -fdx 2>/dev/null || true
 
@@ -7070,16 +7118,17 @@ git clean -fdx 2>/dev/null || true
 git checkout -f 2>/dev/null || true
 git reset --hard 2>/dev/null || true
 
-# Tentar fazer checkout e reset para a branch limpa (prioridade: davi-alteracoes > davi-alteraçoes > main > master)
-if git show-ref --verify --quiet refs/remotes/origin/davi-alteracoes; then
-  git checkout -f -B davi-alteracoes origin/davi-alteracoes
-  git reset --hard origin/davi-alteracoes
-elif git show-ref --verify --quiet refs/remotes/origin/davi-alteraçoes; then
-  git checkout -f -B davi-alteraçoes origin/davi-alteraçoes
-  git reset --hard origin/davi-alteraçoes
+# Tentar fazer checkout e reset para a branch selecionada (ou com fallback limpo)
+target_br="${BRANCH_AMANDA_ESCOLHIDA:-main}"
+if [ -n "${target_br}" ] && git show-ref --verify --quiet "refs/remotes/origin/${target_br}"; then
+  git checkout -f -B "${target_br}" "origin/${target_br}"
+  git reset --hard "origin/${target_br}"
 elif git show-ref --verify --quiet refs/remotes/origin/main; then
   git checkout -f -B main origin/main
   git reset --hard origin/main
+elif git show-ref --verify --quiet refs/remotes/origin/davi-alteracoes; then
+  git checkout -f -B davi-alteracoes origin/davi-alteracoes
+  git reset --hard origin/davi-alteracoes
 elif git show-ref --verify --quiet refs/remotes/origin/master; then
   git checkout -f -B master origin/master
   git reset --hard origin/master
@@ -8322,12 +8371,14 @@ mf_git_clean_preservando_locais() {
   git clean -fd -e api_transcricao/run_transcricao.sh 2>/dev/null || true
 }
 mf_git_detectar_deploy_branch() {
-  if git show-ref --verify --quiet refs/remotes/origin/davi-alteracoes; then
+  if [ -n "${BRANCH_AMANDA_ESCOLHIDA:-}" ] && git show-ref --verify --quiet "refs/remotes/origin/${BRANCH_AMANDA_ESCOLHIDA}"; then
+    printf '%s\n' "${BRANCH_AMANDA_ESCOLHIDA}"
+  elif git show-ref --verify --quiet refs/remotes/origin/main; then
+    printf '%s\n' main
+  elif git show-ref --verify --quiet refs/remotes/origin/davi-alteracoes; then
     printf '%s\n' davi-alteracoes
   elif git show-ref --verify --quiet refs/remotes/origin/davi-alteraçoes; then
     printf '%s\n' davi-alteraçoes
-  elif git show-ref --verify --quiet refs/remotes/origin/main; then
-    printf '%s\n' main
   elif git show-ref --verify --quiet refs/remotes/origin/master; then
     printf '%s\n' master
   elif git show-ref --verify --quiet refs/remotes/origin/MULTI100-OFICIAL-u21; then
