@@ -1566,7 +1566,8 @@ PYEOF
   fi
 
   docker compose -p "${empresa:-amanda}" pull 2>/dev/null || true
-  docker compose -p "${empresa:-amanda}" up -d --build
+  docker compose -p "${empresa:-amanda}" build frontend backend
+  docker compose -p "${empresa:-amanda}" up -d --build --force-recreate frontend backend
 
   # Localizar contêineres dinamicamente para esta empresa
   local be_container oficial_container
