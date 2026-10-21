@@ -10675,7 +10675,8 @@ menu_gerenciar_api_oficial() {
     printf "     [${BLUE}5${WHITE}] Parar API Oficial (Docker)\n"
     printf "     [${BLUE}6${WHITE}] Ver Logs em Tempo Real da API Oficial (Docker)\n"
     printf "     [${BLUE}7${WHITE}] Sincronizar Integração com Backend AMANDA\n"
-    printf "     [${BLUE}8${WHITE}] Desinstalar API Oficial\n"
+    printf "     [${BLUE}8${WHITE}] Configurar Nginx e Emitir Certificado SSL para API Oficial\n"
+    printf "     [${BLUE}9${WHITE}] Desinstalar API Oficial\n"
     printf "     [${BLUE}0${WHITE}] Voltar ao Menu Principal\n\n"
     printf "${WHITE}   Escolha uma opção: ${PURPLE}"
     read -r op_oficial
@@ -10687,7 +10688,8 @@ menu_gerenciar_api_oficial() {
       5) parar_api_oficial "$emp" "$compose_dir" ;;
       6) logs_api_oficial "$emp" "$compose_dir" ;;
       7) sincronizar_integracao_backend_api_oficial "$emp" "$compose_dir" "$porta_oficial" "$url_oficial" ;;
-      8) desinstalar_api_oficial "$emp" "$compose_dir" ;;
+      8) configurar_nginx_e_ssl_api_oficial "$emp" "$porta_oficial" "$url_oficial" ;;
+      9) desinstalar_api_oficial "$emp" "$compose_dir" ;;
       0) return 0 ;;
       *) printf "${RED}Opção inválida!${WHITE}\n"; sleep 2 ;;
     esac
@@ -10999,39 +11001,8 @@ PYINJECT
   be_c=$(docker ps --format '{{.Names}}' | grep -E "^${emp}_backend" | head -n 1)
   [ -n "$be_c" ] && docker restart "$be_c" 2>/dev/null || true
 
-  # 1.12 Configurar Nginx reverso e SSL se não for IP puro
-  local hostname_alvo
-  hostname_alvo=$(echo "${url_escolhida}" | sed -E 's|^https?://||' | cut -d':' -f1 | cut -d'/' -f1)
-  if ! echo "$hostname_alvo" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' && [ -n "$hostname_alvo" ]; then
-    printf "${PURPLE} >> Configurando proxy reverso Nginx para ${hostname_alvo}...${WHITE}\n"
-    cat > "/etc/nginx/sites-available/${emp}-oficial" << EOF_NGX
-upstream oficial_${emp} {
-    server 127.0.0.1:${porta_escolhida};
-    keepalive 32;
-}
-server {
-  server_name ${hostname_alvo};
-  location / {
-    proxy_pass http://oficial_${emp};
-    proxy_http_version 1.1;
-    proxy_set_header Upgrade \$http_upgrade;
-    proxy_set_header Connection 'upgrade';
-    proxy_set_header Host \$host;
-    proxy_set_header X-Real-IP \$remote_addr;
-    proxy_set_header X-Forwarded-Proto \$scheme;
-    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-    proxy_cache_bypass \$http_upgrade;
-    proxy_buffering on;
-  }
-}
-EOF_NGX
-    ln -sf "/etc/nginx/sites-available/${emp}-oficial" /etc/nginx/sites-enabled/ 2>/dev/null || true
-    if command -v certbot >/dev/null 2>&1 && [ -n "${email_deploy:-}" ]; then
-      printf "${WHITE} >> Emitindo certificado SSL com Certbot...${WHITE}\n"
-      certbot -m "${email_deploy}" --nginx --agree-tos -n -d "${hostname_alvo}" 2>/dev/null || true
-    fi
-    systemctl reload nginx 2>/dev/null || true
-  fi
+  # 1.12 Configurar Nginx reverso e SSL com Certbot
+  configurar_nginx_e_ssl_api_oficial "$emp" "$porta_escolhida" "$url_escolhida"
 
   # 1.13 Resumo da Instalação
   banner
@@ -11200,6 +11171,21 @@ status_api_oficial() {
       printf "   ${YELLOW}  (Execute a Opção [7] no menu para sincronizar e recriar o backend).${WHITE}\n"
     fi
   fi
+  echo
+
+  printf "   ${CYAN}━━ [5] Teste de Certificado SSL e Nginx ━━${WHITE}\n"
+  if [ -n "$url" ] && [[ "$url" == https://* ]]; then
+    local ssl_test
+    ssl_test=$(curl -s -I -o /dev/null -w "%{http_code}" --max-time 6 "$url" 2>/dev/null || echo "FAIL")
+    if [ "$ssl_test" != "FAIL" ] && [ "$ssl_test" != "000" ] && [ "$ssl_test" != "000000" ]; then
+      printf "   ${GREEN}✔ Certificado SSL válido e respondendo no domínio (HTTP %s).${WHITE}\n" "$ssl_test"
+    else
+      printf "   ${RED}✘ Falha ou certificado inválido ao acessar %s.${WHITE}\n" "$url"
+      printf "   ${YELLOW}  (Execute a Opção [8] para emitir o certificado SSL pelo Nginx).${WHITE}\n"
+    fi
+  else
+    printf "   ${WHITE}ℹ Teste ignorado (URL não usa HTTPS ou não definida: %s).${WHITE}\n" "${url:-Nenhuma}"
+  fi
 
   echo
   printf "${WHITE}>> Pressione Enter para voltar ao menu...${WHITE}\n"
@@ -11364,9 +11350,103 @@ PYEOF
   be_c=$(docker ps --format '{{.Names}}' | grep -E "^${emp}_backend" | head -n 1)
   [ -n "$be_c" ] && docker restart "$be_c" 2>/dev/null || true
 
+  # Configurar Nginx e emitir Certificado SSL se for domínio FQDN
+  configurar_nginx_e_ssl_api_oficial "$emp" "$porta" "$url"
+
   printf "\n${GREEN} >> Integração sincronizada com sucesso! O Backend agora reconhece a API Oficial.${WHITE}\n\n"
   printf "${WHITE}>> Pressione Enter para voltar ao menu...${WHITE}\n"
   read -r
+}
+
+# 8. Configurar Nginx e Emitir Certificado SSL para API Oficial
+configurar_nginx_e_ssl_api_oficial() {
+  local emp="${1:-${empresa:-amanda}}"
+  local porta="${2:-6000}"
+  local url="${3:-}"
+  local app_dir="/home/deploy/${emp}"
+  [ -z "$compose_dir" ] && compose_dir=$(localizar_diretorio_compose "${app_dir}")
+
+  if [ -z "$url" ] || [ "$url" = "Não configurada" ]; then
+    if [ -f "${compose_dir}/.env" ]; then
+      url=$(grep -m1 '^URL_API_OFICIAL=' "${compose_dir}/.env" 2>/dev/null | cut -d '=' -f2- | tr -d '\r')
+    fi
+  fi
+  if [ -z "$url" ] || [ "$url" = "Não configurada" ]; then
+    printf "${WHITE} >> Informe a URL ou Subdomínio da API Oficial (ex.: https://oficial.dominio.com): \n"
+    read -r url
+  fi
+
+  url=$(echo "$url" | tr -d '"\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+  local hostname_alvo
+  hostname_alvo=$(echo "${url}" | sed -E 's|^https?://||' | cut -d':' -f1 | cut -d'/' -f1)
+
+  if [ -z "$hostname_alvo" ] || echo "$hostname_alvo" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
+    printf "${YELLOW} >> Configuração de Nginx/SSL ignorada para IP puro ou domínio inválido (${hostname_alvo}).${WHITE}\n"
+    sleep 2
+    return 0
+  fi
+
+  banner
+  printf "   ${PURPLE}╔══════════════════════════════════════════════════════════════╗${WHITE}\n"
+  printf "   ${PURPLE}║${WHITE}     CONFIGURAÇÃO DE NGINX E CERTIFICADO SSL (CERTBOT)        ${PURPLE}║${WHITE}\n"
+  printf "   ${PURPLE}╚══════════════════════════════════════════════════════════════╝${WHITE}\n\n"
+  printf "   ${WHITE}Subdomínio alvo:    ${CYAN}%s${WHITE}\n" "$hostname_alvo"
+  printf "   ${WHITE}Porta do contêiner: ${YELLOW}%s${WHITE}\n\n" "$porta"
+
+  printf "${PURPLE} >> Criando arquivo de configuração Nginx para ${hostname_alvo}...${WHITE}\n"
+  cat > "/etc/nginx/sites-available/${emp}-oficial" << EOF_NGX
+upstream oficial_${emp} {
+    server 127.0.0.1:${porta};
+    keepalive 32;
+}
+
+server {
+  listen 80;
+  server_name ${hostname_alvo};
+
+  location / {
+    proxy_pass http://oficial_${emp};
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade \$http_upgrade;
+    proxy_set_header Connection 'upgrade';
+    proxy_set_header Host \$host;
+    proxy_set_header X-Real-IP \$remote_addr;
+    proxy_set_header X-Forwarded-Proto \$scheme;
+    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+    proxy_cache_bypass \$http_upgrade;
+    proxy_buffering on;
+  }
+}
+EOF_NGX
+
+  ln -sf "/etc/nginx/sites-available/${emp}-oficial" /etc/nginx/sites-enabled/ 2>/dev/null || true
+  if nginx -t 2>/dev/null; then
+    systemctl reload nginx 2>/dev/null || true
+    printf "${GREEN} >> Nginx configurado e recarregado com sucesso na porta 80.${WHITE}\n"
+  else
+    printf "${RED} >> Erro na sintaxe do Nginx! Verifique a configuração.${WHITE}\n"
+    nginx -t || true
+    sleep 3
+    return 1
+  fi
+
+  if command -v certbot >/dev/null 2>&1; then
+    printf "${WHITE} >> Solicitando emissão do certificado SSL com Certbot para ${hostname_alvo}...${WHITE}\n"
+    local email_arg
+    if [ -n "${email_deploy:-}" ]; then
+      email_arg="-m ${email_deploy}"
+    else
+      email_arg="--register-unsafely-without-email"
+    fi
+    certbot --nginx ${email_arg} --agree-tos --redirect -n -d "${hostname_alvo}" 2>/dev/null || \
+      certbot --nginx ${email_arg} --agree-tos -n -d "${hostname_alvo}" 2>/dev/null || true
+    systemctl reload nginx 2>/dev/null || true
+    printf "${GREEN} >> Certificado SSL emitido e ativado no Nginx com sucesso!${WHITE}\n"
+  else
+    printf "${YELLOW} >> Certbot não encontrado. Certificado SSL não emitido automaticamente.${WHITE}\n"
+  fi
+
+  sleep 2
 }
 
 # 9. Desinstalar API Oficial
