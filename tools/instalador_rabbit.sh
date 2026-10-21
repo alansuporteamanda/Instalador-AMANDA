@@ -226,7 +226,7 @@ update_backend_env() {
       sed -i "s|RABBITMQ_HOST=.*|RABBITMQ_HOST=localhost|g" "$env_file"
       sed -i "s|RABBITMQ_URI=amqp://.*@.*rabbitmq|RABBITMQ_URI=amqp://\${RABBIT_USER}:\${RABBIT_PASS}@localhost:5672/|g" "$env_file"
       success "Arquivo .env do backend atualizado para usar localhost."
-      warn "Reinicie o backend (PM2) para aplicar as mudanças: pm2 restart ${empresa}-backend"
+      warn "Reinicie o backend para aplicar as mudanças: docker restart ${empresa}_backend"
     fi
   fi
 }

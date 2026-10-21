@@ -161,7 +161,7 @@ carregar_variaveis() {
 # Verificar se a API Oficial já está instalada
 verificar_instalacao_apioficial() {
   banner
-  printf "${WHITE} >> Verificando se a API Oficial já está instalada...\n"
+  printf "${WHITE} >> Verificando instalação da API Oficial...\n"
   echo
   
   # Verificar se o diretório da API Oficial existe
@@ -169,72 +169,92 @@ verificar_instalacao_apioficial() {
     printf "${RED} >> ERRO: API Oficial não está instalada nesta instância!${WHITE}\n"
     printf "${RED} >> Diretório /home/deploy/${empresa}/api_oficial não encontrado.${WHITE}\n"
     echo
-    printf "${YELLOW} >> Execute primeiro o script de instalação da API Oficial para a empresa ${empresa}.${WHITE}\n"
+    printf "${YELLOW} >> Execute primeiro a opção 'Instalar API Oficial' no instalador_single.sh.${WHITE}\n"
     echo
     sleep 5
     exit 1
   fi
   
-  # Verificar se o processo PM2 está rodando (como usuário deploy)
-  pm2_status=$(sudo su - deploy -c "pm2 jlist 2>/dev/null | grep -qF 'api_oficial_${empresa}' && echo running || pm2 jlist 2>/dev/null | grep -qF '\"name\":\"api_oficial\"' && echo running || echo not_running")
+  # Remover qualquer processo legado no PM2 para garantir que rode 100% em contêiner
+  sudo su - deploy -c "pm2 delete api_oficial_${empresa} 2>/dev/null || pm2 delete api_oficial 2>/dev/null || true; pm2 save 2>/dev/null || true" 2>/dev/null || true
+
+  # Verificar contêiner Docker
+  local c_oficial
+  c_oficial=$(docker ps --format '{{.Names}}' | grep -E "^${empresa}_apioficial" | head -n 1)
   
-  if [ "$pm2_status" = "not_running" ]; then
-    printf "${RED} >> AVISO: API Oficial não está rodando no PM2!${WHITE}\n"
-    printf "${YELLOW} >> Tentando iniciar a API Oficial...${WHITE}\n"
-    echo
+  if [ -z "$c_oficial" ]; then
+    printf "${YELLOW} >> Contêiner da API Oficial (${empresa}_apioficial) não está em execução.${WHITE}\n"
+    printf "${WHITE} >> O atualizador irá compilar e iniciar o contêiner Docker automaticamente.${WHITE}\n"
   else
-    printf "${GREEN} >> API Oficial encontrada e rodando no PM2!${WHITE}\n"
-    echo
+    printf "${GREEN} >> API Oficial encontrada e ativa no Docker (${c_oficial})!${WHITE}\n"
   fi
-  
+  echo
   sleep 2
 }
 
-# Atualizar código da API Oficial
+# Atualizar código da API Oficial via Docker Compose
 atualizar_codigo_apioficial() {
   banner
-  printf "${WHITE} >> Atualizando código da API Oficial...\n"
+  printf "${WHITE} >> Atualizando código e contêiner da API Oficial...\n"
   echo
   {
-    sudo su - deploy <<EOF
-cd /home/deploy/${empresa}
+    local app_dir="/home/deploy/${empresa}"
+    local compose_dir=""
+    if [ -f "${app_dir}/amanda/docker-compose.yml" ]; then
+      compose_dir="${app_dir}/amanda"
+    elif [ -f "${app_dir}/docker-compose.yml" ]; then
+      compose_dir="${app_dir}"
+    else
+      compose_dir="${app_dir}"
+    fi
 
-printf "${WHITE} >> Fazendo pull das atualizações...\n"
-git reset --hard
-git pull
+    printf "${WHITE} >> Fazendo pull das atualizações do repositório Git...\n"
+    sudo -u deploy git -C "${app_dir}" pull 2>/dev/null || true
 
-cd /home/deploy/${empresa}/api_oficial
+    mkdir -p "/home/deploy/${empresa}/api_oficial/public"
+    touch "/home/deploy/${empresa}/api_oficial/public/.gitkeep"
 
-printf "${WHITE} >> Instalando dependências atualizadas...\n"
-npm install
+    # Garantir Dockerfile
+    if [ ! -f "/home/deploy/${empresa}/api_oficial/Dockerfile" ]; then
+      printf "${WHITE} >> Criando Dockerfile da API Oficial...\n"
+      cat << 'EOF_API_DF' > "/home/deploy/${empresa}/api_oficial/Dockerfile"
+FROM node:20-alpine
+WORKDIR /app
+RUN apk add --no-cache openssl
+COPY package*.json ./
+RUN npm install --production && npm install prisma@5.14.0
+COPY . .
+RUN mkdir -p /app/public
+RUN npx prisma generate
+RUN npm run build
+EXPOSE 6000
+CMD ["node", "dist/main.js"]
+EOF_API_DF
+    fi
 
-printf "${WHITE} >> Gerando Prisma...\n"
-npx prisma generate
+    # Recompilar e reiniciar contêiner da API Oficial
+    printf "${PURPLE} >> Reconstruindo contêiner Docker da API Oficial...${WHITE}\n"
+    cd "${compose_dir}" && docker compose -p "${empresa}" up -d --build --force-recreate api_oficial
+    sleep 5
 
-printf "${WHITE} >> Buildando aplicação...\n"
-npm run build
+    printf "${WHITE} >> Executando migrações Prisma dentro do contêiner...${WHITE}\n"
+    docker exec "${empresa}_apioficial" npx prisma migrate deploy 2>/dev/null || \
+      docker exec "${empresa}_apioficial" npx prisma db push 2>/dev/null || true
 
-printf "${WHITE} >> Executando migrações...\n"
-npx prisma migrate deploy
-
-printf "${WHITE} >> Gerando cliente Prisma...\n"
-npx prisma generate client
-
-printf "${GREEN} >> Código da API Oficial atualizado com sucesso!${WHITE}\n"
-sleep 2
-EOF
+    printf "${GREEN} >> Código e contêiner da API Oficial atualizados com sucesso!${WHITE}\n"
+    sleep 2
   } || trata_erro "atualizar_codigo_apioficial"
 }
 
-# Reiniciar API Oficial no PM2 (su -c garante o mesmo ambiente que pm2 list na verificação)
+# Reiniciar API Oficial no Docker
 reiniciar_apioficial() {
   banner
-  printf "${WHITE} >> Reiniciando API Oficial no PM2...\n"
+  printf "${WHITE} >> Verificando status final do contêiner Docker...\n"
   echo
   {
-    sudo su - deploy -c "cd /home/deploy/${empresa}/api_oficial && (pm2 restart api_oficial_${empresa} 2>/dev/null || pm2 restart api_oficial 2>/dev/null || pm2 start dist/main.js --name api_oficial_${empresa}) && pm2 save"
+    docker restart "${empresa}_apioficial" 2>/dev/null || true
   } || trata_erro "reiniciar_apioficial"
-  printf "${GREEN} >> API Oficial reiniciada com sucesso!${WHITE}\n"
+  printf "${GREEN} >> Contêiner da API Oficial operacional e reiniciado!${WHITE}\n"
   echo
   sleep 2
 }
@@ -248,10 +268,13 @@ main() {
   reiniciar_apioficial
   
   banner
-  printf "${GREEN} >> Atualização da API Oficial concluída com sucesso!${WHITE}\n"
+  printf "${GREEN} >> Atualização da API Oficial concluída com sucesso em Contêiner Docker!${WHITE}\n"
   echo
-  printf "${WHITE} >> Instância: ${YELLOW}${empresa}${WHITE}\n"
-  printf "${WHITE} >> API Oficial atualizada e rodando na porta: ${YELLOW}${default_apioficial_port}${WHITE}\n"
+  printf "${WHITE} >> Instância:        ${YELLOW}${empresa}${WHITE}\n"
+  printf "${WHITE} >> Contêiner Docker: ${GREEN}${empresa}_apioficial${WHITE}\n"
+  printf "${WHITE} >> Porta HTTP:       ${YELLOW}${default_apioficial_port}${WHITE}\n"
+  echo
+  docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" | grep -E "${empresa}_apioficial|NAMES" || true
   echo
   sleep 5
 }

@@ -380,7 +380,7 @@ instalar_node_pm2() {
     n 20.19.4 || true
   fi
   export PATH="/usr/local/n/versions/node/20.19.4/bin:/usr/local/bin:/usr/bin:$PATH"
-  npm install -g pm2 || trata_erro "pm2"
+  npm install -g pm2 2>/dev/null || true
   # PATH no bashrc do deploy
   if [ -d /home/deploy ] && ! grep -q '/usr/local/n/versions/node' /home/deploy/.bashrc 2>/dev/null; then
     echo 'export PATH=/usr/local/n/versions/node/20.19.4/bin:/usr/bin:$PATH' >>/home/deploy/.bashrc
@@ -438,7 +438,7 @@ garantir_deps_vps_multiflow() {
     instalar_node_pm2
   fi
   if ! command -v pm2 >/dev/null 2>&1; then
-    npm install -g pm2 || trata_erro "pm2"
+    npm install -g pm2 2>/dev/null || true
   fi
   if ! command -v go >/dev/null 2>&1; then
     instalar_golang

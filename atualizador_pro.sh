@@ -1431,7 +1431,11 @@ UPDATEAPP
     trata_erro "atualizar_api_oficial_pro"
   fi
 
-  sudo su - deploy <<RESTARTPM2ATUALIZACAO
+  if docker ps --format '{{.Names}}' 2>/dev/null | grep -qE "^${empresa}_(backend|frontend)"; then
+    docker restart "${empresa}_backend" "${empresa}_frontend" "${empresa}_apioficial" 2>/dev/null || true
+    printf "${GREEN} >> Contêineres Docker reiniciados com sucesso.${WHITE}\n"
+  elif command -v pm2 >/dev/null 2>&1 || sudo su - deploy -c "command -v pm2" >/dev/null 2>&1; then
+    sudo su - deploy <<RESTARTPM2ATUALIZACAO
   export PATH="/usr/local/bin:/usr/bin:\${PATH:-}"
   if [ -d /usr/local/n/versions/node/20.19.4/bin ]; then
     export PATH="/usr/local/n/versions/node/20.19.4/bin:\$PATH"
@@ -1448,6 +1452,7 @@ UPDATEAPP
   pm2 flush 2>/dev/null || true
   pm2 save
 RESTARTPM2ATUALIZACAO
+  fi
 
   sudo su - root <<EOF
     if systemctl is-active --quiet nginx; then

@@ -305,7 +305,7 @@ solicitar_porta_apioficial() {
   fi
 
   banner
-  printf "${WHITE} >> Porta HTTP da API Oficial (PM2 escuta em 127.0.0.1:PORTA)\n"
+  printf "${WHITE} >> Porta HTTP da API Oficial (Contêiner escuta em 127.0.0.1:PORTA)\n"
   echo
   if [ ${#API_OFICIAL_PORTAS_RESUMO[@]} -gt 0 ]; then
     printf "${YELLOW} >> Portas já usadas por outra(s) API Oficial:${WHITE}\n"
@@ -557,51 +557,142 @@ EOF
   } || trata_erro "configurar_env_apioficial"
 }
 
-# Instalar e configurar API Oficial
+# Instalar e configurar API Oficial em Contêiner Docker
 instalar_apioficial() {
   banner
-  printf "${WHITE} >> Instalando e configurando API Oficial...\n"
+  printf "${WHITE} >> Instalando e configurando API Oficial em Contêiner Docker...\n"
   echo
   {
-    sudo su - deploy <<EOF
-cd /home/deploy/${empresa}/api_oficial
+    local app_dir="/home/deploy/${empresa}"
+    local compose_dir=""
+    if [ -f "${app_dir}/amanda/docker-compose.yml" ]; then
+      compose_dir="${app_dir}/amanda"
+    elif [ -f "${app_dir}/docker-compose.yml" ]; then
+      compose_dir="${app_dir}"
+    else
+      compose_dir="${app_dir}"
+    fi
 
-printf "${WHITE} >> Instalando dependências...\n"
-npm install
+    # Parar e remover qualquer processo PM2 legado
+    sudo su - deploy -c "pm2 delete api_oficial_${empresa} 2>/dev/null || pm2 delete api_oficial 2>/dev/null || true; pm2 save 2>/dev/null || true" 2>/dev/null || true
 
-printf "${WHITE} >> Gerando Prisma...\n"
-npx prisma generate
+    mkdir -p "/home/deploy/${empresa}/api_oficial/public"
+    touch "/home/deploy/${empresa}/api_oficial/public/.gitkeep"
 
-printf "${WHITE} >> Buildando aplicação...\n"
-npm run build
+    # Garantir Dockerfile
+    if [ ! -f "/home/deploy/${empresa}/api_oficial/Dockerfile" ]; then
+      printf "${WHITE} >> Criando Dockerfile da API Oficial...\n"
+      cat << 'EOF_API_DF' > "/home/deploy/${empresa}/api_oficial/Dockerfile"
+FROM node:20-alpine
+WORKDIR /app
+RUN apk add --no-cache openssl
+COPY package*.json ./
+RUN npm install --production && npm install prisma@5.14.0
+COPY . .
+RUN mkdir -p /app/public
+RUN npx prisma generate
+RUN npm run build
+EXPOSE 6000
+CMD ["node", "dist/main.js"]
+EOF_API_DF
+    fi
 
-printf "${WHITE} >> Executando migrações...\n"
-npx prisma migrate dev
+    # Integrar ao docker-compose.yml se existir
+    if [ -f "${compose_dir}/docker-compose.yml" ]; then
+      printf "${PURPLE} >> Integrando serviço api_oficial ao docker-compose.yml...${WHITE}\n"
+      python3 - "${compose_dir}/docker-compose.yml" "${empresa}" "${default_apioficial_port}" "${senha_deploy:-Acertitech13@}" << 'PYINJECT'
+import sys, re
+compose_file, proj, port, db_pass = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+with open(compose_file, "r", encoding="utf-8") as f:
+    content = f.read()
 
-printf "${WHITE} >> Gerando cliente Prisma...\n"
-npx prisma generate client
+if "api_oficial:" in content:
+    content = re.sub(r'\n[ ]{2}#?[^\n]*API OFICIAL[^\n]*\n[ ]{2}api_oficial:\n(?:[ ]{4,}.*\n)*', '\n', content)
+    content = re.sub(r'^[ ]{2}api_oficial:\n(?:[ ]{4,}.*\n)*', '', content, flags=re.M)
 
-printf "${WHITE} >> Iniciando aplicação com PM2...\n"
-pm2 start dist/main.js --name=api_oficial_${empresa}
+net_match = re.search(r'networks:\s*\n\s+([a-zA-Z0-9_-]+):', content)
+net_name = net_match.group(1) if net_match else f"{proj}_net"
 
-printf "${GREEN} >> API Oficial instalada e configurada com sucesso!${WHITE}\n"
-sleep 2
-EOF
+api_block = f"""
+  api_oficial:
+    build:
+      context: ./api_oficial
+      dockerfile: Dockerfile
+    container_name: {proj}_apioficial
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - ./api_oficial/.env
+    ports:
+      - "{port}:6000"
+    networks:
+      - {net_name}
+"""
+
+if re.search(r'\nvolumes:\s*\n', content):
+    content = re.sub(r'\nvolumes:\s*\n', f"{api_block}\nvolumes:\n", content, count=1)
+else:
+    content = content.rstrip() + "\n" + api_block
+
+with open(compose_file, "w", encoding="utf-8") as f:
+    f.write(content)
+PYINJECT
+    fi
+
+    printf "${WHITE} >> Construindo e iniciando contêiner Docker da API Oficial...${WHITE}\n"
+    cd "${compose_dir}" && docker compose -p "${empresa}" up -d --build api_oficial
+    sleep 6
+
+    printf "${WHITE} >> Executando migrações Prisma dentro do contêiner...${WHITE}\n"
+    docker exec "${empresa}_apioficial" npx prisma migrate deploy 2>/dev/null || \
+      docker exec "${empresa}_apioficial" npx prisma db push 2>/dev/null || true
+
+    printf "${GREEN} >> API Oficial instalada e executando em contêiner Docker com sucesso!${WHITE}\n"
+    sleep 2
   } || trata_erro "instalar_apioficial"
 }
 
-# Atualizar .env do backend com URL da API Oficial
+# Atualizar .env do backend com URL da API Oficial e reiniciar backend
 atualizar_env_backend() {
   banner
-  printf "${WHITE} >> Atualizando .env do backend com URL da API Oficial...\n"
+  printf "${WHITE} >> Atualizando integração da API Oficial no backend...\n"
   echo
   {
-    # Adicionar URL_API_OFICIAL ao .env do backend
-    echo "URL_API_OFICIAL=https://${subdominio_oficial}" >> /home/deploy/${empresa}/backend/.env
-    chown deploy:deploy "/home/deploy/${empresa}/backend/.env" 2>/dev/null || true
-    chmod 600 "/home/deploy/${empresa}/backend/.env" 2>/dev/null || true
+    local app_dir="/home/deploy/${empresa}"
+    local compose_dir=""
+    if [ -f "${app_dir}/amanda/docker-compose.yml" ]; then
+      compose_dir="${app_dir}/amanda"
+    elif [ -f "${app_dir}/docker-compose.yml" ]; then
+      compose_dir="${app_dir}"
+    fi
 
-    printf "${GREEN} >> .env do backend atualizado com sucesso!${WHITE}\n"
+    # Atualizar .env do compose se existir
+    if [ -n "$compose_dir" ] && [ -f "${compose_dir}/.env" ]; then
+      sed -i "s|^URL_API_OFICIAL=.*|URL_API_OFICIAL=https://${subdominio_oficial}|" "${compose_dir}/.env" 2>/dev/null || echo "URL_API_OFICIAL=https://${subdominio_oficial}" >> "${compose_dir}/.env"
+      sed -i "s|^USE_WHATSAPP_OFICIAL=.*|USE_WHATSAPP_OFICIAL=true|" "${compose_dir}/.env" 2>/dev/null || echo "USE_WHATSAPP_OFICIAL=true" >> "${compose_dir}/.env"
+      sed -i "s|^TOKEN_API_OFICIAL=.*|TOKEN_API_OFICIAL=adminpro|" "${compose_dir}/.env" 2>/dev/null || echo "TOKEN_API_OFICIAL=adminpro" >> "${compose_dir}/.env"
+    fi
+
+    # Atualizar backend/.env
+    if [ -f "/home/deploy/${empresa}/backend/.env" ]; then
+      sed -i "s|^URL_API_OFICIAL=.*|URL_API_OFICIAL=https://${subdominio_oficial}|" "/home/deploy/${empresa}/backend/.env" 2>/dev/null || echo "URL_API_OFICIAL=https://${subdominio_oficial}" >> "/home/deploy/${empresa}/backend/.env"
+      sed -i "s|^USE_WHATSAPP_OFICIAL=.*|USE_WHATSAPP_OFICIAL=true|" "/home/deploy/${empresa}/backend/.env" 2>/dev/null || echo "USE_WHATSAPP_OFICIAL=true" >> "/home/deploy/${empresa}/backend/.env"
+      sed -i "s|^TOKEN_API_OFICIAL=.*|TOKEN_API_OFICIAL=adminpro|" "/home/deploy/${empresa}/backend/.env" 2>/dev/null || echo "TOKEN_API_OFICIAL=adminpro" >> "/home/deploy/${empresa}/backend/.env"
+      chown deploy:deploy "/home/deploy/${empresa}/backend/.env" 2>/dev/null || true
+      chmod 600 "/home/deploy/${empresa}/backend/.env" 2>/dev/null || true
+    fi
+
+    # Reiniciar contêiner do backend
+    local be_c
+    be_c=$(docker ps --format '{{.Names}}' | grep -E "^${empresa}_backend" | head -n 1)
+    if [ -n "$be_c" ]; then
+      docker restart "$be_c" 2>/dev/null || true
+      printf "${GREEN} >> Contêiner ${be_c} reiniciado com sucesso!${WHITE}\n"
+    fi
+
+    printf "${GREEN} >> Backend integrado à API Oficial com sucesso!${WHITE}\n"
     sleep 2
   } || trata_erro "atualizar_env_backend"
 }

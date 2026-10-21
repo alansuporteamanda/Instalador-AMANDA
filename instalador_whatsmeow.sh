@@ -1682,7 +1682,7 @@ EOF
   } || trata_erro "reiniciar_servicos"
 }
 
-# Reiniciar PM2 do backend da instância (aplica WUZAPI_* no .env)
+# Reiniciar backend da instância (aplica WUZAPI_* no .env)
 reiniciar_pm2_backend() {
   banner
   printf "${WHITE} >> Reiniciando backend ${BLUE}${empresa}${WHITE} para aplicar o WhatsMeow...\n"
@@ -1690,53 +1690,32 @@ reiniciar_pm2_backend() {
   {
     # shellcheck source=/dev/null
     source "$ARQUIVO_VARIAVEIS"
+
+    # Prioridade 1: Contêiner Docker (Padrão AMANDA)
+    local c_back
+    c_back=$(docker ps --format '{{.Names}}' 2>/dev/null | grep -E "^${empresa}_backend" | head -n 1)
+    if [ -n "$c_back" ]; then
+      docker restart "$c_back"
+      printf "${GREEN} >> Contêiner ${c_back} reiniciado — variáveis WUZAPI aplicadas.${WHITE}\n"
+      sleep 2
+      return 0
+    fi
+
+    # Prioridade 2: Docker Compose da instância
+    local compose_dir="/home/deploy/${empresa}"
+    [ -d "/home/deploy/${empresa}/amanda" ] && compose_dir="/home/deploy/${empresa}/amanda"
+    if [ -f "${compose_dir}/docker-compose.yml" ]; then
+      cd "${compose_dir}" && docker compose -p "${empresa}" restart backend 2>/dev/null || true
+      printf "${GREEN} >> Serviço backend reiniciado no Docker Compose — variáveis WUZAPI aplicadas.${WHITE}\n"
+      sleep 2
+      return 0
+    fi
+
+    # Fallback legado: Processo PM2 (se existir)
     local pm2_name="${empresa}-backend"
-    local _path_node="${INSTALADOR_DIR}/tools/path_node_deploy.sh"
-    [ ! -f "$_path_node" ] && _path_node="/root/instalador_single_oficial/tools/path_node_deploy.sh"
-
-    local rc=0
-    sudo su - deploy <<RESTARTBACKEND || rc=$?
-set -e
-if [ -f "${_path_node}" ]; then
-  # shellcheck source=/dev/null
-  . "${_path_node}"
-else
-  export PATH="/usr/local/bin:/usr/bin:\${PATH:-}"
-  if [ -d /usr/local/n/versions/node/20.19.4/bin ]; then
-    export PATH="/usr/local/n/versions/node/20.19.4/bin:\$PATH"
-  fi
-fi
-
-if ! command -v pm2 >/dev/null 2>&1; then
-  echo "ERRO: pm2 não encontrado para o usuário deploy."
-  exit 1
-fi
-
-echo ">> PM2 — processos:"
-pm2 list 2>/dev/null || true
-
-if pm2 describe "${pm2_name}" >/dev/null 2>&1; then
-  pm2 restart "${pm2_name}"
-  pm2 save
-  echo "OK: ${pm2_name} reiniciado."
-elif pm2 jlist 2>/dev/null | grep -qF "\"name\":\"${pm2_name}\""; then
-  pm2 restart "${pm2_name}"
-  pm2 save
-  echo "OK: ${pm2_name} reiniciado."
-else
-  echo "AVISO: processo ${pm2_name} não encontrado no PM2."
-  pm2 list 2>/dev/null || true
-  exit 2
-fi
-RESTARTBACKEND
-
-    if [ "$rc" -eq 0 ]; then
-      printf "${GREEN} >> Backend ${pm2_name} reiniciado — variáveis WUZAPI aplicadas.${WHITE}\n"
-    elif [ "$rc" -eq 2 ]; then
-      printf "${YELLOW}⚠️  ${pm2_name} não encontrado no PM2.${WHITE}\n"
-      printf "${WHITE}   Execute como deploy: pm2 restart ${pm2_name}${WHITE}\n"
-    else
-      trata_erro "reiniciar_pm2_backend"
+    if command -v pm2 >/dev/null 2>&1 || sudo su - deploy -c "command -v pm2" >/dev/null 2>&1; then
+      sudo su - deploy -c "pm2 restart ${pm2_name} 2>/dev/null && pm2 save 2>/dev/null" || true
+      printf "${GREEN} >> Backend reiniciado.${WHITE}\n"
     fi
     sleep 2
   } || trata_erro "reiniciar_pm2_backend"

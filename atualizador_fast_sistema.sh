@@ -151,7 +151,11 @@ EOF
     return 1
   fi
 
-  sudo su - deploy <<EOF
+  if docker ps --format '{{.Names}}' 2>/dev/null | grep -qE "^${empresa}_apioficial"; then
+    docker restart "${empresa}_apioficial" 2>/dev/null || true
+    printf "${GREEN} >> Contêiner API Oficial reiniciado via Docker.${WHITE}\n"
+  elif command -v pm2 >/dev/null 2>&1 || sudo su - deploy -c "command -v pm2" >/dev/null 2>&1; then
+    sudo su - deploy <<EOF
 set +e
 if [ -f /root/instalador_single_oficial/tools/path_node_deploy.sh ]; then
   . /root/instalador_single_oficial/tools/path_node_deploy.sh
@@ -163,6 +167,7 @@ cd /home/deploy/${empresa}/api_oficial
 pm2 restart api_oficial_${empresa} 2>/dev/null || pm2 restart api_oficial 2>/dev/null || pm2 start dist/main.js --name api_oficial_${empresa}
 pm2 save
 EOF
+  fi
   printf "${GREEN} >> API Oficial atualizada.${WHITE}\n"
   return 0
 }
@@ -1475,7 +1480,11 @@ EOF
     printf "${YELLOW} >> Aviso: tools/mf_transcricao_manutencao.sh não encontrado.${WHITE}\n"
   fi
 
-  sudo su - deploy <<RESTARTPM2ATUALIZACAO
+  if docker ps --format '{{.Names}}' 2>/dev/null | grep -qE "^${empresa}_(backend|frontend)"; then
+    docker restart "${empresa}_backend" "${empresa}_frontend" "${empresa}_transcricao" "${empresa}_apioficial" 2>/dev/null || true
+    printf "${GREEN} >> Contêineres Docker da empresa ${empresa} reiniciados com sucesso!${WHITE}\n"
+  elif command -v pm2 >/dev/null 2>&1 || sudo su - deploy -c "command -v pm2" >/dev/null 2>&1; then
+    sudo su - deploy <<RESTARTPM2ATUALIZACAO
 printf "${WHITE} >> Atualização Concluida, Reiniciando Instancias da empresa ${empresa} e Aplicando a Atualização... \n"
 sleep 7
 if [ -d /usr/local/n/versions/node/20.19.4/bin ]; then
@@ -1492,6 +1501,7 @@ PORT="${frontend_port}" pm2 restart "${empresa}-frontend" --update-env 2>/dev/nu
   || pm2 restart "${empresa}-frontend" 2>/dev/null || true
 pm2 save
 RESTARTPM2ATUALIZACAO
+  fi
 
   sudo su - root <<EOF
     if systemctl is-active --quiet nginx; then

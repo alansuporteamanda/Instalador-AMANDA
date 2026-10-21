@@ -369,7 +369,11 @@ export NODE_OPTIONS="--max-old-space-size=4096 --openssl-legacy-provider"
 npm run build
 REBUILD
 
-  sudo su - deploy <<PM2R
+  if docker ps --format '{{.Names}}' 2>/dev/null | grep -qE "^${empresa}_(backend|frontend)"; then
+    docker restart "${empresa}_backend" "${empresa}_frontend" 2>/dev/null || true
+    printf "${GREEN} >> Contêineres backend e frontend reiniciados via Docker.${WHITE}\n"
+  elif command -v pm2 >/dev/null 2>&1 || sudo su - deploy -c "command -v pm2" >/dev/null 2>&1; then
+    sudo su - deploy <<PM2R
 if [ -f /root/instalador_single_oficial/tools/path_node_deploy.sh ]; then
   . /root/instalador_single_oficial/tools/path_node_deploy.sh
 else
@@ -381,6 +385,7 @@ PORT="${frontend_port:-3000}" pm2 restart ${empresa}-frontend --update-env 2>/de
   || pm2 restart ${empresa}-frontend 2>/dev/null || true
 pm2 save
 PM2R
+  fi
 }
 
 nginx_apioficial() {
@@ -580,12 +585,12 @@ if [ -f "/home/deploy/${empresa}/api_oficial/.env" ]; then
     set_env_key "/home/deploy/${empresa}/api_oficial/.env" "URL_BACKEND_MULT100" "$novo_backend"
     set_env_key "$BACK_ENV" "URL_API_OFICIAL" "$novo_of_url"
 
-    sudo su - deploy <<EOF
-if [ -f /root/instalador_single_oficial/tools/path_node_deploy.sh ]; then
-  . /root/instalador_single_oficial/tools/path_node_deploy.sh
-fi
-cd /home/deploy/${empresa}/api_oficial && (pm2 restart api_oficial_${empresa} 2>/dev/null || pm2 restart api_oficial 2>/dev/null || pm2 start dist/main.js --name api_oficial_${empresa}) && pm2 save
-EOF
+    if docker ps --format '{{.Names}}' 2>/dev/null | grep -qE "^${empresa}_apioficial"; then
+      docker restart "${empresa}_apioficial" 2>/dev/null || true
+      printf "${GREEN} >> Contêiner da API Oficial reiniciado via Docker.${WHITE}\n"
+    elif command -v pm2 >/dev/null 2>&1 || sudo su - deploy -c "command -v pm2" >/dev/null 2>&1; then
+      sudo su - deploy -c "cd /home/deploy/${empresa}/api_oficial && (pm2 restart api_oficial_${empresa} 2>/dev/null || pm2 restart api_oficial 2>/dev/null || pm2 start dist/main.js --name api_oficial_${empresa}) && pm2 save" 2>/dev/null || true
+    fi
     printf "${GREEN} >> API Oficial atualizada.${WHITE}\n"
   fi
 fi

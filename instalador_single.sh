@@ -3118,37 +3118,23 @@ ferramentas_escolher_item_lista() {
   return 0
 }
 
-# Apps PM2 (pool de conexões) podem reabrir sessão logo após pg_terminate_backend e impedir DROP/CREATE.
+# Para contêineres e aplicações da instância para liberar sessões do banco de dados antes de DROP/CREATE
 ferramentas_pm2_parar_para_manutencao_pg() {
   local em="${1:-${empresa:-}}"
   [ -n "$em" ] || return 0
-  printf "${WHITE} >> Parando PM2 da instância %s (libera conexões no PostgreSQL)...${WHITE}\n" "$em"
-  sudo su - deploy <<STOPDBPM2
-set +e
-export PATH="/usr/local/bin:/usr/bin:\${PATH:-}"
-if [ -d /usr/local/n/versions/node/20.19.4/bin ]; then
-  export PATH="/usr/local/n/versions/node/20.19.4/bin:\$PATH"
-elif [ -d /usr/local/n/versions/node ]; then
-  _mf_nv=\$(ls -1 /usr/local/n/versions/node 2>/dev/null | sort -V | tail -1)
-  if [ -n "\$_mf_nv" ] && [ -d "/usr/local/n/versions/node/\$_mf_nv/bin" ]; then
-    export PATH="/usr/local/n/versions/node/\$_mf_nv/bin:\$PATH"
-  fi
-fi
-if [ -f /root/instalador_single_oficial/tools/path_node_deploy.sh ]; then
-  . /root/instalador_single_oficial/tools/path_node_deploy.sh
-fi
-for _p in "${em}-backend" "${em}-frontend" "${em}-transcricao" "transc-${em}" "api_oficial_${em}"; do
-  pm2 stop "\$_p" 2>/dev/null || true
-done
-sleep 3
-STOPDBPM2
+  printf "${WHITE} >> Parando serviços da instância %s (libera conexões no PostgreSQL)...${WHITE}\n" "$em"
+  # Parar contêineres Docker da instância
+  docker stop "${em}_backend" "${em}_frontend" "${em}_transcricao" "${em}_apioficial" 2>/dev/null || true
+  # Limpar/parar eventuais processos PM2 legados
+  sudo su - deploy -c "for _p in '${em}-backend' '${em}-frontend' '${em}-transcricao' 'transc-${em}' 'api_oficial_${em}'; do pm2 stop \"\$_p\" 2>/dev/null || true; done" 2>/dev/null || true
+  sleep 2
 }
 
 ferramentas_pm2_aviso_retomada_manual_pg() {
   local em="${1:-${empresa:-}}"
   [ -n "$em" ] || return 0
-  printf "${YELLOW} >> PM2 da instância %s ficou parado de propósito.${WHITE}\n" "$em"
-  printf "${YELLOW} >> Após validar a importação, inicie manualmente os processos desejados com pm2 list/restart.${WHITE}\n"
+  printf "${YELLOW} >> Serviços/contêineres da instância %s ficaram parados de propósito.${WHITE}\n" "$em"
+  printf "${YELLOW} >> Após validar a importação, inicie os contêineres pelo Menu opção 4 ou execute 'docker compose up -d'.${WHITE}\n"
 }
 
 # DROP + CREATE + restore em banco alvo (PostgreSQL nativo).
@@ -4315,7 +4301,7 @@ atualizar_baileys_pro_heineken_ferramentas() {
   # Token no package.json (registry Baileys) também aplicado como deploy — evita arquivo com dono root antes do npm i
   local tok_sed="${github_token//&/\\&}"
 
-  printf "${WHITE} >> Como usuário ${BLUE}deploy${WHITE}: TOKEN no package.json (se MultiFlow-PRO), rm baileys + lock, npm i e pm2 restart...${WHITE}\n"
+  printf "${WHITE} >> Como usuário ${BLUE}deploy${WHITE}: TOKEN no package.json (se MultiFlow-PRO), rm baileys + lock, npm i e reinício dos serviços...${WHITE}\n"
   echo
 
   if ! sudo su - deploy <<BAILEYSDEPLOY
@@ -4343,12 +4329,15 @@ atualizar_baileys_pro_heineken_ferramentas() {
   fi
   rm -rf node_modules/baileys package-lock.json
   npm i || exit 1
-  if pm2 list 2>/dev/null | grep -qE "${empresa}-backend[[:space:]]"; then
+  if docker ps --format '{{.Names}}' 2>/dev/null | grep -qE "^${empresa}_backend"; then
+    docker restart "${empresa}_backend" 2>/dev/null || true
+    echo ">> Contêiner ${empresa}_backend reiniciado com sucesso."
+  elif pm2 list 2>/dev/null | grep -qE "${empresa}-backend[[:space:]]"; then
     pm2 restart "${empresa}-backend"
     pm2 save
-    printf "${GREEN} >> Backend ${empresa}-backend reiniciado.${WHITE}\n"
+    echo ">> Backend ${empresa}-backend reiniciado no PM2."
   else
-    printf "${YELLOW} >> Processo ${empresa}-backend não encontrado no PM2. Rode manualmente após verificar: pm2 list${WHITE}\n"
+    echo ">> Reinicie o backend: docker restart ${empresa}_backend"
   fi
   exit 0
 BAILEYSDEPLOY
@@ -4428,8 +4417,8 @@ menu_ferramentas() {
     printf "   [${BLUE}25${WHITE}] Atualizar MultiFlow-VOZ\n"
     printf "   [${BLUE}26${WHITE}] Instalar HUB MultiFlow\n"
     printf "   [${BLUE}27${WHITE}] Atualizar HUB MultiFlow\n"
-    printf "   [${BLUE}31${WHITE}] Instalar API Oficial (WhatsApp Meta Cloud)\n"
-    printf "   [${BLUE}32${WHITE}] Atualizar API Oficial\n"
+    printf "   [${BLUE}31${WHITE}] Instalar ou Gerenciar API Oficial (WhatsApp Meta Cloud)\n"
+    printf "   [${BLUE}32${WHITE}] Atualizar API Oficial (Docker)\n"
     echo
     printf "  ${BLUE}━━ Versão da aplicação ━━${WHITE}\n"
     printf "   [${BLUE}4${WHITE}] Roolback Versão\n"
@@ -4504,19 +4493,10 @@ menu_ferramentas() {
       fi
       ;;
     5)
-      SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-      INSTANCIAS_SCRIPT="${SCRIPT_DIR}/tools/instalador_instancias.sh"
-      if [ -f "$INSTANCIAS_SCRIPT" ]; then
-        printf "${GREEN} >> Executando Instalador de Novas Instâncias...${WHITE}\n"
-        echo
-        bash "$INSTANCIAS_SCRIPT"
-        echo
-        printf "${GREEN} >> Pressione Enter para voltar ao menu de ferramentas...${WHITE}\n"
-        read -r
-      else
-        printf "${RED} >> Erro: Arquivo ${INSTANCIAS_SCRIPT} não encontrado!${WHITE}\n"
-        sleep 3
-      fi
+      iniciar_instalacao_nova_instancia
+      echo
+      printf "${GREEN} >> Pressione Enter para voltar ao menu de ferramentas...${WHITE}\n"
+      read -r
       ;;
     24)
       instalar_multiflow_voz
@@ -5207,6 +5187,7 @@ menu() {
     printf "   [${BLUE}8${WHITE}] Menu de Ferramentas Adicionais\n"
     printf "   [${BLUE}9${WHITE}] Desinstalar Plataforma ${nome_titulo}\n"
     printf "   [${BLUE}10${WHITE}] Homologação GHCR / Configurar Watchtower\n"
+    printf "   [${BLUE}11${WHITE}] Instalar ou Gerenciar API Oficial\n"
     printf "   [${BLUE}0${WHITE}] Sair\n"
     echo
     read -p "> " option
@@ -5240,6 +5221,9 @@ menu() {
       ;;
     10)
       configurar_watchtower_homologacao
+      ;;
+    11)
+      menu_gerenciar_api_oficial
       ;;
     0)
       sair
@@ -5315,7 +5299,7 @@ instalacao_base() {
     fi
   fi
   if [ "$etapa" -le "10" ]; then
-    instala_pm2_base || trata_erro "instala_pm2_base"
+    printf "${GREEN} >> Modo 100%% Docker: PM2 nativo dispensado (todos os microsserviços rodam em contêineres).${WHITE}\n"
     salvar_etapa 11
   fi
   if [ "$etapa" -le "11" ]; then
@@ -6713,89 +6697,11 @@ EOF
   } || trata_erro "instala_redis_base"
 }
 
-# Instala PM2
+# PM2 nativo desativado - a plataforma AMANDA opera 100% conteinerizada via Docker
 instala_pm2_base() {
-  banner
-  printf "${WHITE} >> Instalando pm2...\n"
-  echo
-  
-  {
-    sudo su - root <<'PM2INSTALL'
-    # Configura PATH para incluir Node.js
-    export PATH=/usr/local/n/versions/node/20.19.4/bin:/usr/bin:/usr/local/bin:$PATH
-    
-    # Tenta encontrar node em vários locais possíveis
-    NODE_BIN=""
-    if command -v node &> /dev/null; then
-      NODE_BIN=$(which node)
-      printf " >> Node.js encontrado em: $NODE_BIN\n"
-    elif [ -f /usr/local/n/versions/node/20.19.4/bin/node ]; then
-      NODE_BIN="/usr/local/n/versions/node/20.19.4/bin/node"
-      export PATH=/usr/local/n/versions/node/20.19.4/bin:/usr/bin:$PATH
-      printf " >> Node.js encontrado em: $NODE_BIN\n"
-    elif [ -f /usr/bin/node ]; then
-      NODE_BIN="/usr/bin/node"
-      printf " >> Node.js encontrado em: $NODE_BIN\n"
-    else
-      printf " >> ERRO: Node.js não está instalado ou não foi encontrado no sistema.\n"
-      printf " >> Procurando Node.js no sistema...\n"
-      find /usr -name node -type f 2>/dev/null | head -5
-      exit 1
-    fi
-    
-    # Verifica npm
-    if ! command -v npm &> /dev/null; then
-      printf " >> ERRO: npm não está instalado ou não foi encontrado no sistema.\n"
-      printf " >> Procurando npm no sistema...\n"
-      find /usr -name npm -type f 2>/dev/null | head -5
-      exit 1
-    fi
-    
-    # Mostra versões
-    printf " >> Versão do Node.js: "
-    node --version || exit 1
-    printf " >> Versão do npm: "
-    npm --version || exit 1
-    
-    # Instala PM2 globalmente
-    printf " >> Instalando PM2...\n"
-    npm install -g pm2 || {
-      printf " >> Erro ao instalar PM2. Tentando com sudo...\n"
-      exit 1
-    }
-    
-    # Verifica se PM2 foi instalado
-    if ! command -v pm2 &> /dev/null; then
-      printf " >> PM2 não encontrado no PATH. Procurando...\n"
-      PM2_BIN=$(find /usr -name pm2 -type f 2>/dev/null | head -1)
-      if [ -n "$PM2_BIN" ]; then
-        printf " >> PM2 encontrado em: $PM2_BIN\n"
-        ln -sf "$PM2_BIN" /usr/bin/pm2 2>/dev/null || true
-      else
-        printf " >> ERRO: PM2 não foi instalado corretamente\n"
-        exit 1
-      fi
-    fi
-    
-    printf " >> PM2 instalado com sucesso!\n"
-    pm2 --version || exit 1
-    
-    # Configura o PM2 para iniciar automaticamente
-    printf " >> Configurando PM2 para iniciar automaticamente...\n"
-    export PATH=/usr/local/n/versions/node/20.19.4/bin:/usr/bin:$PATH
-    
-    # Garante que o usuário deploy existe
-    if id "deploy" &>/dev/null; then
-      pm2 startup ubuntu -u deploy --hp /home/deploy || {
-        printf " >> Aviso: Não foi possível configurar startup automático. Continuando...\n"
-      }
-    else
-      printf " >> Aviso: Usuário deploy não existe ainda. Startup será configurado depois.\n"
-    fi
-PM2INSTALL
-    
-    sleep 2
-  } || trata_erro "instala_pm2_base"
+  printf "${GREEN} >> AMANDA 100%% Docker: PM2 nativo dispensado (todos os microsserviços rodam em contêineres Docker).${WHITE}\n"
+  sleep 1
+  return 0
 }
 
 # Instala Nginx e dependências
@@ -7993,46 +7899,15 @@ SEEDINSTALL
     sleep 2
 
     banner
-    printf "${WHITE} >> Iniciando pm2 ${BLUE}backend${WHITE}...\n"
+    printf "${WHITE} >> Iniciando serviço ${BLUE}backend${WHITE}...\n"
     echo
-    sudo su - deploy <<PM2BACKEND
-  # Configura PATH para Node.js e PM2
-  if [ -f /root/instalador_single_oficial/tools/path_node_deploy.sh ]; then
-    . /root/instalador_single_oficial/tools/path_node_deploy.sh
-  else
-    export PATH="/usr/local/bin:/usr/bin:\${PATH:-}"
-    if [ -d /usr/local/n/versions/node/20.19.4/bin ]; then
-      export PATH="/usr/local/n/versions/node/20.19.4/bin:\$PATH"
-    elif [ -d /usr/local/n/versions/node ]; then
-      _mf_nv=\$(ls -1 /usr/local/n/versions/node 2>/dev/null | sort -V | tail -1)
-      if [ -n "\$_mf_nv" ] && [ -d "/usr/local/n/versions/node/\$_mf_nv/bin" ]; then
-        export PATH="/usr/local/n/versions/node/\$_mf_nv/bin:\$PATH"
-      fi
+    local compose_dir
+    compose_dir=$(localizar_diretorio_compose "/home/deploy/${empresa}")
+    if [ -f "${compose_dir}/docker-compose.yml" ]; then
+      cd "${compose_dir}" && docker compose -p "${empresa}" up -d backend
+    elif command -v pm2 >/dev/null 2>&1; then
+      sudo su - deploy -c "cd /home/deploy/${empresa}/backend && pm2 start dist/server.js --name ${empresa}-backend 2>/dev/null || true"
     fi
-    if ! command -v npm >/dev/null 2>&1; then
-      echo "ERRO: npm não encontrado no PATH do usuário deploy."
-      echo "      Atualize o instalador em /root/instalador_single_oficial (inclua tools/path_node_deploy.sh) ou, como root: n 20.19.4"
-      echo "      Verifique: ls /usr/local/n/versions/node/  e  sudo ls -la /usr/bin/npm"
-      exit 1
-    fi
-  fi
-  
-  BACKEND_DIR="/home/deploy/${empresa}/backend"
-  if [ ! -d "\$BACKEND_DIR" ]; then
-    echo "ERRO: Diretório do backend não existe: \$BACKEND_DIR"
-    exit 1
-  fi
-  
-  cd "\$BACKEND_DIR"
-  
-  # Verifica se o arquivo dist/server.js existe
-  if [ ! -f "dist/server.js" ]; then
-    echo "ERRO: Arquivo dist/server.js não encontrado. O build pode ter falhado."
-    exit 1
-  fi
-  
-  pm2 start dist/server.js --name ${empresa}-backend
-PM2BACKEND
 
     # Garantia extra: sed/comandos como root na etapa anterior não devem deixar .env como root (PM2 roda como deploy).
     garantir_permissoes_env_backend "/home/deploy/${empresa}/backend/.env"
@@ -8177,47 +8052,15 @@ FRONTENDBUILD
     sleep 2
 
     banner
-    printf "${WHITE} >> Iniciando pm2 ${BLUE}frontend${WHITE}...\n"
+    printf "${WHITE} >> Iniciando serviço ${BLUE}frontend${WHITE}...\n"
     echo
-    sudo su - deploy <<PM2FRONTEND
-  # Configura PATH para Node.js e PM2
-  if [ -f /root/instalador_single_oficial/tools/path_node_deploy.sh ]; then
-    . /root/instalador_single_oficial/tools/path_node_deploy.sh
-  else
-    export PATH="/usr/local/bin:/usr/bin:\${PATH:-}"
-    if [ -d /usr/local/n/versions/node/20.19.4/bin ]; then
-      export PATH="/usr/local/n/versions/node/20.19.4/bin:\$PATH"
-    elif [ -d /usr/local/n/versions/node ]; then
-      _mf_nv=\$(ls -1 /usr/local/n/versions/node 2>/dev/null | sort -V | tail -1)
-      if [ -n "\$_mf_nv" ] && [ -d "/usr/local/n/versions/node/\$_mf_nv/bin" ]; then
-        export PATH="/usr/local/n/versions/node/\$_mf_nv/bin:\$PATH"
-      fi
+    local compose_dir
+    compose_dir=$(localizar_diretorio_compose "/home/deploy/${empresa}")
+    if [ -f "${compose_dir}/docker-compose.yml" ]; then
+      cd "${compose_dir}" && docker compose -p "${empresa}" up -d frontend
+    elif command -v pm2 >/dev/null 2>&1; then
+      sudo su - deploy -c "cd /home/deploy/${empresa}/frontend && pm2 start server.js --name ${empresa}-frontend 2>/dev/null && pm2 save 2>/dev/null || true"
     fi
-    if ! command -v npm >/dev/null 2>&1; then
-      echo "ERRO: npm não encontrado no PATH do usuário deploy."
-      echo "      Atualize o instalador em /root/instalador_single_oficial (inclua tools/path_node_deploy.sh) ou, como root: n 20.19.4"
-      echo "      Verifique: ls /usr/local/n/versions/node/  e  sudo ls -la /usr/bin/npm"
-      exit 1
-    fi
-  fi
-  
-  FRONTEND_DIR="/home/deploy/${empresa}/frontend"
-  if [ ! -d "\$FRONTEND_DIR" ]; then
-    echo "ERRO: Diretório do frontend não existe: \$FRONTEND_DIR"
-    exit 1
-  fi
-  
-  cd "\$FRONTEND_DIR"
-  
-  # Verifica se server.js existe
-  if [ ! -f "server.js" ]; then
-    echo "ERRO: Arquivo server.js não encontrado em \$FRONTEND_DIR"
-    exit 1
-  fi
-  
-  pm2 start server.js --name ${empresa}-frontend
-  pm2 save
-PM2FRONTEND
 
     sleep 2
   } || trata_erro "instala_frontend_base"
@@ -8480,33 +8323,11 @@ EOF
 
     sleep 2
 
-    sudo su - deploy <<RESTARTPM2
-  # Configura PATH para Node.js e PM2
-  if [ -f /root/instalador_single_oficial/tools/path_node_deploy.sh ]; then
-    . /root/instalador_single_oficial/tools/path_node_deploy.sh
-  else
-    export PATH="/usr/local/bin:/usr/bin:\${PATH:-}"
-    if [ -d /usr/local/n/versions/node/20.19.4/bin ]; then
-      export PATH="/usr/local/n/versions/node/20.19.4/bin:\$PATH"
-    elif [ -d /usr/local/n/versions/node ]; then
-      _mf_nv=\$(ls -1 /usr/local/n/versions/node 2>/dev/null | sort -V | tail -1)
-      if [ -n "\$_mf_nv" ] && [ -d "/usr/local/n/versions/node/\$_mf_nv/bin" ]; then
-        export PATH="/usr/local/n/versions/node/\$_mf_nv/bin:\$PATH"
-      fi
+    if docker ps --format '{{.Names}}' 2>/dev/null | grep -qE "^${empresa}_(backend|frontend)"; then
+      docker restart "${empresa}_backend" "${empresa}_frontend" "${empresa}_transcricao" "${empresa}_apioficial" 2>/dev/null || true
+    elif command -v pm2 >/dev/null 2>&1; then
+      sudo su - deploy -c "for _p in '${empresa}-backend' '${empresa}-frontend' '${empresa}-transcricao'; do pm2 restart \"\$_p\" 2>/dev/null || true; done"
     fi
-    if ! command -v npm >/dev/null 2>&1; then
-      echo "ERRO: npm não encontrado no PATH do usuário deploy."
-      echo "      Atualize o instalador em /root/instalador_single_oficial (inclua tools/path_node_deploy.sh) ou, como root: n 20.19.4"
-      echo "      Verifique: ls /usr/local/n/versions/node/  e  sudo ls -la /usr/bin/npm"
-      exit 1
-    fi
-  fi
-  # Reiniciar apenas processos PM2 relacionados à empresa específica
-  # Detecta todos os processos que começam com o nome da empresa (independente do sufixo)
-  for _p in "${empresa}-backend" "${empresa}-frontend" "${empresa}-transcricao"; do
-    pm2 restart "\$_p" 2>/dev/null || true
-  done
-RESTARTPM2
 
     sleep 2
   } || trata_erro "config_latencia_base"
@@ -8763,24 +8584,11 @@ baixa_codigo_atualizar() {
   printf "${WHITE} >> Parando Instancias da empresa ${empresa}... \n"
   echo
   sleep 2
-  sudo su - deploy <<STOPPM2
-  # PATH para pm2 apenas (parar processos não exige npm)
-  export PATH="/usr/local/bin:/usr/bin:\${PATH:-}"
-  if [ -d /usr/local/n/versions/node/20.19.4/bin ]; then
-    export PATH="/usr/local/n/versions/node/20.19.4/bin:\$PATH"
-  elif [ -d /usr/local/n/versions/node ]; then
-    _mf_nv=\$(ls -1 /usr/local/n/versions/node 2>/dev/null | sort -V | tail -1)
-    if [ -n "\$_mf_nv" ] && [ -d "/usr/local/n/versions/node/\$_mf_nv/bin" ]; then
-      export PATH="/usr/local/n/versions/node/\$_mf_nv/bin:\$PATH"
-    fi
+
+  docker stop "${empresa}_backend" "${empresa}_frontend" "${empresa}_transcricao" "${empresa}_apioficial" 2>/dev/null || true
+  if command -v pm2 >/dev/null 2>&1; then
+    sudo su - deploy -c "for _p in '${empresa}-backend' '${empresa}-frontend' '${empresa}-transcricao'; do pm2 stop \"\$_p\" 2>/dev/null || true; done"
   fi
-  # Parar apenas processos PM2 relacionados à empresa específica
-  # Detecta todos os processos que começam com o nome da empresa (independente do sufixo)
-  # Não afeta processos de outras instâncias
-  for _p in "${empresa}-backend" "${empresa}-frontend" "${empresa}-transcricao"; do
-    pm2 stop "\$_p" 2>/dev/null || true
-  done
-STOPPM2
 
   sleep 2
 
@@ -9137,7 +8945,11 @@ UPDATEAPP
       || printf "${YELLOW} >> Aviso: falha ao reconfigurar transcrição automaticamente.${WHITE}\n"
   fi
 
-  sudo su - deploy <<RESTARTPM2ATUALIZACAO
+  if docker ps --format '{{.Names}}' 2>/dev/null | grep -qE "^${empresa}_(backend|frontend)"; then
+    docker restart "${empresa}_backend" "${empresa}_frontend" "${empresa}_transcricao" "${empresa}_apioficial" 2>/dev/null || true
+    printf "${GREEN} >> Contêineres Docker da empresa ${empresa} reiniciados com sucesso!${WHITE}\n"
+  elif command -v pm2 >/dev/null 2>&1 || sudo su - deploy -c "command -v pm2" >/dev/null 2>&1; then
+    sudo su - deploy <<RESTARTPM2ATUALIZACAO
   export PATH="/usr/local/bin:/usr/bin:\${PATH:-}"
   if [ -d /usr/local/n/versions/node/20.19.4/bin ]; then
     export PATH="/usr/local/n/versions/node/20.19.4/bin:\$PATH"
@@ -9153,6 +8965,7 @@ UPDATEAPP
     || pm2 restart "${empresa}-frontend" 2>/dev/null || true
   pm2 save
 RESTARTPM2ATUALIZACAO
+  fi
 
   sudo su - root <<EOF
     if systemctl is-active --quiet nginx; then
@@ -10755,40 +10568,769 @@ STARTPM2CORRECT
   read -r
 }
 
-# Adicionar função para instalar API Oficial
-instalar_api_oficial() {
+# ================================================================
+# GERENCIAMENTO, INSTALAÇÃO E DESINSTALAÇÃO DA API OFICIAL
+# ================================================================
+
+# Helper para localizar container da API Oficial
+mf_localizar_container_apioficial() {
+  local emp="${1:-amanda}"
+  local c
+  c=$(docker ps --format '{{.Names}}' | grep -E "^${emp}_apioficial" | head -n 1)
+  [ -z "$c" ] && c=$(docker ps --format '{{.Names}}' | grep -E "${emp}.*oficial" | head -n 1)
+  [ -z "$c" ] && c=$(docker ps -a --format '{{.Names}}' | grep -E "^${emp}_apioficial" | head -n 1)
+  [ -z "$c" ] && c=$(docker ps -a --format '{{.Names}}' | grep -E "${emp}.*oficial" | head -n 1)
+  printf '%s' "$c"
+}
+
+# Menu de Gerenciamento da API Oficial
+menu_gerenciar_api_oficial() {
+  while true; do
+    selecionar_instancia_atualizar "Instalar ou Gerenciar API Oficial" || return 0
+    local emp="${empresa:-amanda}"
+    local app_dir="/home/deploy/${emp}"
+    local compose_dir
+    compose_dir=$(localizar_diretorio_compose "${app_dir}")
+
+    # Identificar status da API Oficial
+    local status_texto="${RED}Não Instalada${WHITE}"
+    local modo_execucao="Nenhum"
+    local container_id
+    container_id=$(docker ps --format '{{.Names}}' | grep -E "^${emp}_apioficial" | head -n 1)
+    [ -z "$container_id" ] && container_id=$(docker ps --format '{{.Names}}' | grep -E "${emp}.*oficial" | head -n 1)
+
+    if [ -n "$container_id" ]; then
+      status_texto="${GREEN}Ativa em Contêiner Docker (${container_id})${WHITE}"
+      modo_execucao="Docker"
+    elif docker ps -a --format '{{.Names}}' | grep -qE "^${emp}_apioficial|${emp}.*oficial"; then
+      local c_parado
+      c_parado=$(docker ps -a --format '{{.Names}}' | grep -E "^${emp}_apioficial|${emp}.*oficial" | head -n 1)
+      status_texto="${YELLOW}Parada em Contêiner Docker (${c_parado})${WHITE}"
+      modo_execucao="Docker"
+    elif sudo su - deploy -c "pm2 jlist 2>/dev/null | grep -qF 'api_oficial_${emp}'" 2>/dev/null; then
+      status_texto="${YELLOW}Processo PM2 Legado Detectado (Recomendado migrar para Docker)${WHITE}"
+      modo_execucao="PM2 (Legado)"
+    elif [ -d "${compose_dir}/api_oficial" ] || [ -d "/home/deploy/${emp}/api_oficial" ]; then
+      status_texto="${YELLOW}Arquivos presentes (Serviço inativo)${WHITE}"
+      modo_execucao="Inativo"
+    fi
+
+    # Obter porta da API Oficial
+    local porta_oficial="${PORT_APIOFICIAL:-6000}"
+    if [ -f "${compose_dir}/api_oficial/.env" ]; then
+      local p_env
+      p_env=$(grep -m1 '^PORT=' "${compose_dir}/api_oficial/.env" 2>/dev/null | cut -d '=' -f2- | tr -d '\r')
+      [ -n "$p_env" ] && porta_oficial="$p_env"
+    elif [ -f "/home/deploy/${emp}/api_oficial/.env" ]; then
+      local p_env
+      p_env=$(grep -m1 '^PORT=' "/home/deploy/${emp}/api_oficial/.env" 2>/dev/null | cut -d '=' -f2- | tr -d '\r')
+      [ -n "$p_env" ] && porta_oficial="$p_env"
+    fi
+
+    # Obter URL configurada
+    local url_oficial="${subdominio_oficial:-Não configurada}"
+    if [ -f "${compose_dir}/.env" ]; then
+      local u_env
+      u_env=$(grep -m1 '^URL_API_OFICIAL=' "${compose_dir}/.env" 2>/dev/null | cut -d '=' -f2- | tr -d '\r')
+      [ -n "$u_env" ] && url_oficial="$u_env"
+    fi
+
+    banner
+    printf "   ${PURPLE}╔══════════════════════════════════════════════════════════════╗${WHITE}\n"
+    printf "   ${PURPLE}║${WHITE}             INSTALAR OU GERENCIAR API OFICIAL                ${PURPLE}║${WHITE}\n"
+    printf "   ${PURPLE}║${WHITE}           (WhatsApp Meta Cloud API - Stack AMANDA)           ${PURPLE}║${WHITE}\n"
+    printf "   ${PURPLE}╚══════════════════════════════════════════════════════════════╝${WHITE}\n\n"
+    printf "   ${WHITE}Instância:       ${GREEN}%s${WHITE}\n" "$emp"
+    printf "   ${WHITE}Status Atual:    %b\n" "$status_texto"
+    printf "   ${WHITE}Modo:            ${CYAN}%s${WHITE}\n" "$modo_execucao"
+    printf "   ${WHITE}Porta HTTP:      ${YELLOW}%s${WHITE}\n" "$porta_oficial"
+    printf "   ${WHITE}URL Configurada: ${YELLOW}%s${WHITE}\n\n" "$url_oficial"
+    printf "   ${WHITE}Selecione a ação desejada:\n"
+    printf "     [${BLUE}1${WHITE}] Instalar API Oficial (Contêiner Docker - Padrão AMANDA)\n"
+    printf "     [${BLUE}2${WHITE}] Atualizar API Oficial (Contêiner Docker)\n"
+    printf "     [${BLUE}3${WHITE}] Status Detalhado e Teste de Conexão\n"
+    printf "     [${BLUE}4${WHITE}] Iniciar / Reiniciar API Oficial (Docker)\n"
+    printf "     [${BLUE}5${WHITE}] Parar API Oficial (Docker)\n"
+    printf "     [${BLUE}6${WHITE}] Ver Logs em Tempo Real da API Oficial (Docker)\n"
+    printf "     [${BLUE}7${WHITE}] Sincronizar Integração com Backend AMANDA\n"
+    printf "     [${BLUE}8${WHITE}] Desinstalar API Oficial\n"
+    printf "     [${BLUE}0${WHITE}] Voltar ao Menu Principal\n\n"
+    printf "${WHITE}   Escolha uma opção: ${PURPLE}"
+    read -r op_oficial
+    case "$op_oficial" in
+      1) instalar_api_oficial_docker "$emp" "$compose_dir" ;;
+      2) atualizar_api_oficial_gerenciador "$emp" "$compose_dir" ;;
+      3) status_api_oficial "$emp" "$compose_dir" "$porta_oficial" "$url_oficial" ;;
+      4) iniciar_reiniciar_api_oficial "$emp" "$compose_dir" ;;
+      5) parar_api_oficial "$emp" "$compose_dir" ;;
+      6) logs_api_oficial "$emp" "$compose_dir" ;;
+      7) sincronizar_integracao_backend_api_oficial "$emp" "$compose_dir" "$porta_oficial" "$url_oficial" ;;
+      8) desinstalar_api_oficial "$emp" "$compose_dir" ;;
+      0) return 0 ;;
+      *) printf "${RED}Opção inválida!${WHITE}\n"; sleep 2 ;;
+    esac
+  done
+}
+
+# 1. Instalação em Contêiner Docker integrada à Stack AMANDA
+instalar_api_oficial_docker() {
+  local emp="${1:-${empresa:-amanda}}"
+  local compose_dir="${2:-}"
+  local app_dir="/home/deploy/${emp}"
+  [ -z "$compose_dir" ] && compose_dir=$(localizar_diretorio_compose "${app_dir}")
+
   banner
-  printf "${WHITE} >> Instalando API Oficial...\n"
-  echo
-  local INSTALADOR_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  local script_path="${INSTALADOR_DIR}/instalador_apioficial.sh"
-  if [ -f "$script_path" ]; then
-    chmod 775 "$script_path"
-    bash "$script_path"
-  else
-    printf "${RED} >> Script não encontrado em: $script_path${WHITE}\n"
-    sleep 2
+  printf "   ${PURPLE}╔══════════════════════════════════════════════════════════════╗${WHITE}\n"
+  printf "   ${PURPLE}║${WHITE}     INSTALAÇÃO DA API OFICIAL EM CONTÊINER DOCKER            ${PURPLE}║${WHITE}\n"
+  printf "   ${PURPLE}╚══════════════════════════════════════════════════════════════╝${WHITE}\n\n"
+  printf "   ${WHITE}Instância alvo: ${GREEN}%s${WHITE}\n" "$emp"
+  printf "   ${WHITE}Diretório Compose: ${BLUE}%s${WHITE}\n\n" "$compose_dir"
+
+  # 1.1 Verificar/Obter código-fonte da API Oficial
+  if [ ! -d "${compose_dir}/api_oficial" ]; then
+    if [ -d "/home/deploy/${emp}/api_oficial" ]; then
+      printf "${PURPLE} >> Vinculando diretório api_oficial para o compose_dir...${WHITE}\n"
+      ln -sfn "/home/deploy/${emp}/api_oficial" "${compose_dir}/api_oficial" 2>/dev/null || true
+    elif [ -d "${app_dir}/.git" ]; then
+      printf "${WHITE} >> Restaurando diretório api_oficial do repositório Git...${WHITE}\n"
+      git -C "${app_dir}" checkout -f HEAD -- api_oficial 2>/dev/null || true
+    fi
   fi
-  printf "${GREEN} >> Processo de instalação da API Oficial finalizado. Voltando ao menu...${WHITE}\n"
+
+  if [ ! -d "${compose_dir}/api_oficial" ]; then
+    printf "${RED} >> ERRO: Diretório api_oficial não encontrado em ${compose_dir}/api_oficial!${WHITE}\n"
+    printf "${YELLOW} >> Verifique se o repositório da AMANDA foi clonado corretamente.${WHITE}\n"
+    sleep 3
+    return 1
+  fi
+
+  # Limpar qualquer processo PM2 legado para liberar a porta e garantir 100% Docker
+  sudo su - deploy -c "pm2 delete api_oficial_${emp} 2>/dev/null || pm2 delete api_oficial 2>/dev/null || true; pm2 save 2>/dev/null || true" 2>/dev/null || true
+
+  # 1.2 Definir Porta Host para a API Oficial
+  local sugestao_porta="${PORT_APIOFICIAL:-6000}"
+  local porta_atual_uso=""
+  porta_atual_uso=$(proxima_porta_livre "$sugestao_porta")
+  if [ "$porta_atual_uso" != "$sugestao_porta" ]; then
+    local container_atual
+    container_atual=$(docker ps --format '{{.Names}}' | grep -E "^${emp}_apioficial" | head -n 1)
+    if [ -z "$container_atual" ]; then
+      sugestao_porta="$porta_atual_uso"
+    fi
+  fi
+
+  printf "${WHITE} >> Informe a porta HTTP para a API Oficial [Padrão: ${YELLOW}${sugestao_porta}${WHITE}]: \n"
+  read -r porta_escolhida
+  porta_escolhida="${porta_escolhida:-$sugestao_porta}"
+  while ! [[ "$porta_escolhida" =~ ^[0-9]+$ ]] || [ "$porta_escolhida" -lt 1024 ] || [ "$porta_escolhida" -gt 65535 ]; do
+    printf "${RED} >> Porta inválida. Informe um valor numérico entre 1024 e 65535: ${WHITE}\n"
+    read -r porta_escolhida
+    porta_escolhida="${porta_escolhida:-$sugestao_porta}"
+  done
+  printf "${GREEN} >> Porta definida: ${BLUE}%s${WHITE}\n\n" "$porta_escolhida"
+
+  # 1.3 Definir URL / Subdomínio
+  local sugestao_url=""
+  local host_ip
+  host_ip=$(curl -s --max-time 6 http://checkip.amazonaws.com 2>/dev/null | tr -d '\r')
+  [ -z "$host_ip" ] && host_ip=$(hostname -I 2>/dev/null | awk '{print $1}')
+  [ -z "$host_ip" ] && host_ip="127.0.0.1"
+
+  if [ -n "${subdominio_backend:-}" ] && ! echo "${subdominio_backend}" | grep -qE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+'; then
+    local base_domain
+    base_domain=$(echo "$subdominio_backend" | sed -E 's|^https?://||' | sed -E 's|^[^.]+\.||' | cut -d':' -f1 | cut -d'/' -f1)
+    [ -n "$base_domain" ] && sugestao_url="https://oficial.${base_domain}"
+  fi
+  if [ -z "$sugestao_url" ]; then
+    sugestao_url="http://${host_ip}:${porta_escolhida}"
+  fi
+
+  printf "${WHITE} >> Informe a URL ou Subdomínio da API Oficial [Padrão: ${YELLOW}${sugestao_url}${WHITE}]: \n"
+  read -r url_escolhida
+  url_escolhida="${url_escolhida:-$sugestao_url}"
+  case "$url_escolhida" in
+    http://*|https://*) ;;
+    *) url_escolhida="https://${url_escolhida}" ;;
+  esac
+  printf "${GREEN} >> URL definida: ${BLUE}%s${WHITE}\n\n" "$url_escolhida"
+
+  # 1.4 Garantir banco de dados no PostgreSQL
+  printf "${PURPLE} >> Verificando e criando o banco de dados 'api_oficial' no PostgreSQL...${WHITE}\n"
+  local pg_c
+  pg_c=$(docker ps --format '{{.Names}}' | grep -E "^${emp}_postgres" | head -n 1)
+  [ -z "$pg_c" ] && pg_c=$(docker ps --format '{{.Names}}' | grep -E "${emp}.*postgres" | head -n 1)
+  [ -z "$pg_c" ] && pg_c=$(docker ps --format '{{.Names}}' | grep -E "postgres" | head -n 1)
+
+  if [ -n "$pg_c" ]; then
+    docker exec -e PGPASSWORD="${senha_deploy:-Acertitech13@}" "$pg_c" psql -U "${emp}" -d "${emp}" -tc "SELECT 1 FROM pg_database WHERE datname = 'api_oficial'" 2>/dev/null | grep -q 1 || \
+      docker exec -e PGPASSWORD="${senha_deploy:-Acertitech13@}" "$pg_c" psql -U "${emp}" -d "${emp}" -c "CREATE DATABASE api_oficial;" 2>/dev/null || \
+      docker exec -e PGPASSWORD="${senha_deploy:-Acertitech13@}" "$pg_c" psql -U "${emp}" -d postgres -c "CREATE DATABASE api_oficial;" 2>/dev/null || true
+    printf "${GREEN} >> Banco 'api_oficial' pronto no contêiner PostgreSQL (${pg_c})!${WHITE}\n"
+  elif command -v psql >/dev/null 2>&1; then
+    PGPASSWORD="${senha_deploy:-Acertitech13@}" psql -h 127.0.0.1 -p "${PORT_DB:-5432}" -U "${emp}" -d postgres -c "CREATE DATABASE api_oficial;" 2>/dev/null || true
+    printf "${GREEN} >> Banco 'api_oficial' configurado via PostgreSQL local!${WHITE}\n"
+  fi
+
+  # 1.5 Assegurar Dockerfile e estrutura de pastas
+  mkdir -p "${compose_dir}/api_oficial/public"
+  touch "${compose_dir}/api_oficial/public/.gitkeep"
+  if [ ! -f "${compose_dir}/api_oficial/Dockerfile" ]; then
+    printf "${WHITE} >> Criando Dockerfile otimizado para API Oficial...${WHITE}\n"
+    cat << 'EOF_API_DF' > "${compose_dir}/api_oficial/Dockerfile"
+FROM node:20-alpine
+WORKDIR /app
+RUN apk add --no-cache openssl
+COPY package*.json ./
+RUN npm install --production && npm install prisma@5.14.0
+COPY . .
+RUN mkdir -p /app/public
+RUN npx prisma generate
+RUN npm run build
+EXPOSE 6000
+CMD ["node", "dist/main.js"]
+EOF_API_DF
+  else
+    grep -q "mkdir -p /app/public" "${compose_dir}/api_oficial/Dockerfile" || sed -i 's|WORKDIR /app|WORKDIR /app\nRUN mkdir -p /app/public|' "${compose_dir}/api_oficial/Dockerfile" 2>/dev/null || true
+    grep -q "prisma@5.14.0" "${compose_dir}/api_oficial/Dockerfile" || sed -i 's|RUN npm install --production$|RUN npm install --production \&\& npm install prisma@5.14.0|' "${compose_dir}/api_oficial/Dockerfile" 2>/dev/null || true
+  fi
+
+  # 1.6 Configurar arquivo .env da API Oficial
+  printf "${WHITE} >> Configurando arquivo .env da API Oficial...${WHITE}\n"
+  cat <<EOF > "${compose_dir}/api_oficial/.env"
+DATABASE_LINK=postgresql://${emp}:${senha_deploy:-Acertitech13@}@postgres:5432/api_oficial?schema=public
+DATABASE_URL=postgres
+DATABASE_PORT=5432
+DATABASE_USER=${emp}
+DATABASE_PASSWORD=${senha_deploy:-Acertitech13@}
+DATABASE_NAME=api_oficial
+PORT=6000
+TOKEN_ADMIN=adminpro
+NAME_ADMIN=SetupAutomatizado
+EMAIL_ADMIN=admin@amanda.com.br
+PASSWORD_ADMIN=${senha_deploy:-Acertitech13@}
+JWT_SECRET=${jwt_secret:-kZaOTd+YZpjRUyyuQUpigJaEMk4vcW4YOymKPZX0Ts8=}
+JWT_REFRESH_SECRET=${jwt_refresh_secret:-kZaOTd+YZpjRUyyuQUpigJaEMk4vcW4YOymKPZX0Ts8=}
+URL_BACKEND_MULT100=http://backend:8080
+REDIS_URI=redis://redis:6379
+URL_API_OFICIAL=${url_escolhida}
+RABBITMQ_ENABLED_GLOBAL=false
+TZ=America/Sao_Paulo
+EOF
+  chown -R deploy:deploy "${compose_dir}/api_oficial" 2>/dev/null || true
+  chmod 600 "${compose_dir}/api_oficial/.env" 2>/dev/null || true
+
+  # 1.7 Integrar api_oficial no docker-compose.yml
+  if [ -f "${compose_dir}/docker-compose.yml" ]; then
+    printf "${PURPLE} >> Integrando serviço api_oficial no docker-compose.yml...${WHITE}\n"
+    python3 - "${compose_dir}/docker-compose.yml" "${emp}" "${porta_escolhida}" "${senha_deploy:-Acertitech13@}" << 'PYINJECT'
+import sys, re
+
+compose_file = sys.argv[1]
+proj = sys.argv[2]
+port = sys.argv[3]
+db_pass = sys.argv[4]
+
+with open(compose_file, "r", encoding="utf-8") as f:
+    content = f.read()
+
+# Remover bloco existente para evitar duplicatas
+if "api_oficial:" in content:
+    content = re.sub(r'\n[ ]{2}#?[^\n]*API OFICIAL[^\n]*\n[ ]{2}api_oficial:\n(?:[ ]{4,}.*\n)*', '\n', content)
+    content = re.sub(r'^[ ]{2}api_oficial:\n(?:[ ]{4,}.*\n)*', '', content, flags=re.M)
+
+# Identificar a rede dos serviços existentes
+net_match = re.search(r'networks:\s*\n\s*-\s*([a-zA-Z0-9_-]+)', content)
+net_name = net_match.group(1) if net_match else f"{proj}_net"
+
+api_block = f"""
+  # ==========================================================
+  # 8. MICROSSERVIÇO: API OFICIAL (Meta WhatsApp Cloud API)
+  # ==========================================================
+  api_oficial:
+    build:
+      context: ./api_oficial
+      dockerfile: Dockerfile
+    container_name: {proj}_apioficial
+    restart: always
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      PORT: 6000
+      DATABASE_LINK: postgresql://{proj}:{db_pass}@postgres:5432/api_oficial?schema=public
+      DATABASE_URL: postgres
+      DATABASE_PORT: 5432
+      DATABASE_USER: {proj}
+      DATABASE_PASSWORD: {db_pass}
+      DATABASE_NAME: api_oficial
+      NAME_ADMIN: SetupAutomatizado
+      EMAIL_ADMIN: admin@amanda.com.br
+      PASSWORD_ADMIN: {db_pass}
+      JWT_SECRET: ${{JWT_SECRET:-kZaOTd+YZpjRUyyuQUpigJaEMk4vcW4YOymKPZX0Ts8=}}
+      URL_BACKEND_MULT100: http://backend:8080
+      REDIS_URI: redis://redis:6379
+      TOKEN_ADMIN: adminpro
+      URL_API_OFICIAL: ${{URL_API_OFICIAL:-}}
+      RABBITMQ_ENABLED_GLOBAL: "false"
+      TZ: America/Sao_Paulo
+    ports:
+      - "{port}:6000"
+    networks:
+      - {net_name}
+"""
+
+if re.search(r'\nvolumes:\s*\n', content):
+    content = re.sub(r'\nvolumes:\s*\n', f"{api_block}\nvolumes:\n", content, count=1)
+else:
+    content = content.rstrip() + "\n" + api_block
+
+with open(compose_file, "w", encoding="utf-8") as f:
+    f.write(content)
+PYINJECT
+  fi
+
+  # 1.8 Sincronizar variáveis no .env da AMANDA
+  printf "${WHITE} >> Conectando API Oficial ao backend da AMANDA...${WHITE}\n"
+  sincronizar_porta_env "PORT_APIOFICIAL" "${porta_escolhida}" "${compose_dir}/.env"
+  [ -f "${compose_dir}/backend/.env" ] && sincronizar_porta_env "PORT_APIOFICIAL" "${porta_escolhida}" "${compose_dir}/backend/.env"
+
+  sed -i "s|^URL_API_OFICIAL=.*|URL_API_OFICIAL=${url_escolhida}|" "${compose_dir}/.env" 2>/dev/null || echo "URL_API_OFICIAL=${url_escolhida}" >> "${compose_dir}/.env"
+  sed -i "s|^USE_WHATSAPP_OFICIAL=.*|USE_WHATSAPP_OFICIAL=true|" "${compose_dir}/.env" 2>/dev/null || echo "USE_WHATSAPP_OFICIAL=true" >> "${compose_dir}/.env"
+  sed -i "s|^TOKEN_API_OFICIAL=.*|TOKEN_API_OFICIAL=adminpro|" "${compose_dir}/.env" 2>/dev/null || echo "TOKEN_API_OFICIAL=adminpro" >> "${compose_dir}/.env"
+
+  if [ -f "${compose_dir}/backend/.env" ]; then
+    sed -i "s|^URL_API_OFICIAL=.*|URL_API_OFICIAL=${url_escolhida}|" "${compose_dir}/backend/.env" 2>/dev/null || echo "URL_API_OFICIAL=${url_escolhida}" >> "${compose_dir}/backend/.env"
+    sed -i "s|^USE_WHATSAPP_OFICIAL=.*|USE_WHATSAPP_OFICIAL=true|" "${compose_dir}/backend/.env" 2>/dev/null || echo "USE_WHATSAPP_OFICIAL=true" >> "${compose_dir}/backend/.env"
+    sed -i "s|^TOKEN_API_OFICIAL=.*|TOKEN_API_OFICIAL=adminpro|" "${compose_dir}/backend/.env" 2>/dev/null || echo "TOKEN_API_OFICIAL=adminpro" >> "${compose_dir}/backend/.env"
+  fi
+
+  if [ -n "${ARQUIVO_VARIAVEIS_USADO:-}" ] && [ -f "${ARQUIVO_VARIAVEIS_USADO}" ]; then
+    sed -i "s|^subdominio_oficial=.*|subdominio_oficial=${url_escolhida}|" "${ARQUIVO_VARIAVEIS_USADO}" 2>/dev/null || echo "subdominio_oficial=${url_escolhida}" >> "${ARQUIVO_VARIAVEIS_USADO}"
+    sed -i "s|^PORT_APIOFICIAL=.*|PORT_APIOFICIAL=${porta_escolhida}|" "${ARQUIVO_VARIAVEIS_USADO}" 2>/dev/null || echo "PORT_APIOFICIAL=${porta_escolhida}" >> "${ARQUIVO_VARIAVEIS_USADO}"
+  fi
+
+  # 1.9 Compilar e subir contêiner da API Oficial
+  banner
+  printf "${PURPLE} >> Construindo e iniciando o contêiner ${emp}_apioficial...${WHITE}\n"
+  printf "${YELLOW} >> Esse processo pode levar de 1 a 3 minutos na primeira compilação...${WHITE}\n\n"
+  cd "${compose_dir}" && docker compose -p "${emp}" up -d --build api_oficial
+  sleep 6
+
+  # 1.10 Executar migrações do Prisma no contêiner
+  local c_oficial
+  c_oficial=$(docker ps --format '{{.Names}}' | grep -E "^${emp}_apioficial" | head -n 1)
+  [ -z "$c_oficial" ] && c_oficial=$(docker ps --format '{{.Names}}' | grep -E "${emp}.*oficial" | head -n 1)
+
+  if [ -n "$c_oficial" ]; then
+    printf "\n${PURPLE} >> Executando migrações do Prisma no contêiner ${c_oficial}...${WHITE}\n"
+    docker exec "$c_oficial" npx prisma migrate deploy 2>/dev/null || \
+      docker exec "$c_oficial" npx prisma db push 2>/dev/null || true
+    printf "${GREEN} >> Migrações aplicadas com sucesso!${WHITE}\n"
+  fi
+
+  # 1.11 Reiniciar Backend AMANDA para aplicar conexão
+  printf "${WHITE} >> Reiniciando backend AMANDA para estabelecer conexão com a API Oficial...${WHITE}\n"
+  local be_c
+  be_c=$(docker ps --format '{{.Names}}' | grep -E "^${emp}_backend" | head -n 1)
+  [ -n "$be_c" ] && docker restart "$be_c" 2>/dev/null || true
+
+  # 1.12 Configurar Nginx reverso e SSL se não for IP puro
+  local hostname_alvo
+  hostname_alvo=$(echo "${url_escolhida}" | sed -E 's|^https?://||' | cut -d':' -f1 | cut -d'/' -f1)
+  if ! echo "$hostname_alvo" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' && [ -n "$hostname_alvo" ]; then
+    printf "${PURPLE} >> Configurando proxy reverso Nginx para ${hostname_alvo}...${WHITE}\n"
+    cat > "/etc/nginx/sites-available/${emp}-oficial" << EOF_NGX
+upstream oficial_${emp} {
+    server 127.0.0.1:${porta_escolhida};
+    keepalive 32;
+}
+server {
+  server_name ${hostname_alvo};
+  location / {
+    proxy_pass http://oficial_${emp};
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade \$http_upgrade;
+    proxy_set_header Connection 'upgrade';
+    proxy_set_header Host \$host;
+    proxy_set_header X-Real-IP \$remote_addr;
+    proxy_set_header X-Forwarded-Proto \$scheme;
+    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+    proxy_cache_bypass \$http_upgrade;
+    proxy_buffering on;
+  }
+}
+EOF_NGX
+    ln -sf "/etc/nginx/sites-available/${emp}-oficial" /etc/nginx/sites-enabled/ 2>/dev/null || true
+    if command -v certbot >/dev/null 2>&1 && [ -n "${email_deploy:-}" ]; then
+      printf "${WHITE} >> Emitindo certificado SSL com Certbot...${WHITE}\n"
+      certbot -m "${email_deploy}" --nginx --agree-tos -n -d "${hostname_alvo}" 2>/dev/null || true
+    fi
+    systemctl reload nginx 2>/dev/null || true
+  fi
+
+  # 1.13 Resumo da Instalação
+  banner
+  printf "   ${GREEN}╔══════════════════════════════════════════════════════════════╗${WHITE}\n"
+  printf "   ${GREEN}║${WHITE}     API OFICIAL INSTALADA COM SUCESSO NO DOCKER!             ${GREEN}║${WHITE}\n"
+  printf "   ${GREEN}╚══════════════════════════════════════════════════════════════╝${WHITE}\n\n"
+  printf "   ${WHITE}Instância:          ${BLUE}%s${WHITE}\n" "$emp"
+  printf "   ${WHITE}Contêiner Docker:   ${GREEN}%s${WHITE}\n" "${emp}_apioficial"
+  printf "   ${WHITE}Porta Host:         ${YELLOW}%s${WHITE}\n" "$porta_escolhida"
+  printf "   ${WHITE}URL API Oficial:    ${YELLOW}%s${WHITE}\n" "$url_escolhida"
+  printf "   ${WHITE}Banco de Dados:     ${BLUE}api_oficial${WHITE}\n"
+  printf "   ${WHITE}Token de Admin:     ${BLUE}adminpro${WHITE}\n"
+  printf "   ${WHITE}Integrada à AMANDA: ${GREEN}SIM (USE_WHATSAPP_OFICIAL=true)${WHITE}\n\n"
+  docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" | grep -E "${emp}_apioficial|NAMES" || true
+  echo
+  printf "${WHITE}>> Pressione Enter para voltar ao menu de gerenciamento...${WHITE}\n"
+  read -r
+}
+
+# 2. Atualizar API Oficial (Docker)
+atualizar_api_oficial_gerenciador() {
+  local emp="${1:-${empresa:-amanda}}"
+  local compose_dir="${2:-}"
+  local app_dir="/home/deploy/${emp}"
+  [ -z "$compose_dir" ] && compose_dir=$(localizar_diretorio_compose "${app_dir}")
+
+  banner
+  printf "   ${PURPLE}╔══════════════════════════════════════════════════════════════╗${WHITE}\n"
+  printf "   ${PURPLE}║${WHITE}           ATUALIZAR API OFICIAL (CONTÊINER DOCKER)           ${PURPLE}║${WHITE}\n"
+  printf "   ${PURPLE}╚══════════════════════════════════════════════════════════════╝${WHITE}\n\n"
+  printf "   ${WHITE}Instância: ${GREEN}%s${WHITE}\n\n" "$emp"
+
+  # Parar qualquer processo PM2 legado para garantir 100% contêiner
+  sudo su - deploy -c "pm2 delete api_oficial_${emp} 2>/dev/null || pm2 delete api_oficial 2>/dev/null || true; pm2 save 2>/dev/null || true" 2>/dev/null || true
+
+  if [ -d "${app_dir}/.git" ]; then
+    printf "${WHITE} >> Baixando atualizações do repositório Git...${WHITE}\n"
+    sudo -u deploy git -C "${app_dir}" pull 2>/dev/null || true
+  fi
+
+  mkdir -p "${compose_dir}/api_oficial/public"
+  touch "${compose_dir}/api_oficial/public/.gitkeep"
+
+  # Garantir serviço api_oficial no docker-compose.yml se não estiver
+  if [ -f "${compose_dir}/docker-compose.yml" ] && ! grep -q "api_oficial:" "${compose_dir}/docker-compose.yml"; then
+    printf "${WHITE} >> Integrando serviço api_oficial no docker-compose.yml...${WHITE}\n"
+    instalar_api_oficial_docker "$emp" "$compose_dir"
+    return 0
+  fi
+
+  printf "${PURPLE} >> Reconstruindo contêiner da API Oficial...${WHITE}\n"
+  cd "${compose_dir}" && docker compose -p "${emp}" up -d --build --force-recreate api_oficial
+  sleep 5
+
+  printf "${WHITE} >> Executando migrações do banco de dados (Prisma)...${WHITE}\n"
+  docker exec "${emp}_apioficial" npx prisma migrate deploy 2>/dev/null || \
+    docker exec "${emp}_apioficial" npx prisma db push 2>/dev/null || true
+
+  printf "\n${GREEN} >> API Oficial atualizada com sucesso no Docker!${WHITE}\n\n"
+  docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" | grep -E "${emp}_apioficial|NAMES" || true
+
+  echo
+  printf "${WHITE}>> Pressione Enter para continuar...${WHITE}\n"
+  read -r
+}
+
+# 3. Status Detalhado e Teste de Conexão
+status_api_oficial() {
+  local emp="${1:-${empresa:-amanda}}"
+  local compose_dir="${2:-}"
+  local porta="${3:-6000}"
+  local url="${4:-}"
+  local app_dir="/home/deploy/${emp}"
+  [ -z "$compose_dir" ] && compose_dir=$(localizar_diretorio_compose "${app_dir}")
+
+  banner
+  printf "   ${PURPLE}╔══════════════════════════════════════════════════════════════╗${WHITE}\n"
+  printf "   ${PURPLE}║${WHITE}             STATUS E SAÚDE DA API OFICIAL                    ${PURPLE}║${WHITE}\n"
+  printf "   ${PURPLE}╚══════════════════════════════════════════════════════════════╝${WHITE}\n\n"
+  printf "   ${WHITE}Instância:         ${GREEN}%s${WHITE}\n" "$emp"
+  printf "   ${WHITE}Porta configurada: ${YELLOW}%s${WHITE}\n" "$porta"
+  printf "   ${WHITE}URL configurada:   ${YELLOW}%s${WHITE}\n\n" "$url"
+
+  printf "   ${CYAN}━━ [1] Status do Contêiner Docker ━━${WHITE}\n"
+  local c_oficial
+  c_oficial=$(mf_localizar_container_apioficial "$emp")
+  if [ -n "$c_oficial" ]; then
+    docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" | grep -E "$c_oficial|NAMES" || docker ps
+  else
+    printf "   ${YELLOW}Nenhum contêiner Docker ativo para a API Oficial (${emp}_apioficial).${WHITE}\n"
+  fi
+  echo
+
+  if sudo su - deploy -c "pm2 jlist 2>/dev/null | grep -qF 'api_oficial'" 2>/dev/null; then
+    printf "   ${YELLOW}━━ [Aviso Legado] Processo PM2 detectado no servidor ━━${WHITE}\n"
+    sudo su - deploy -c "pm2 list | grep -E 'api_oficial|App name'" 2>/dev/null || true
+    printf "   ${YELLOW}Recomendado migrar/reiniciar via Docker (Opção 1 ou 4).${WHITE}\n\n"
+  fi
+
+  printf "   ${CYAN}━━ [2] Teste de Porta Local (127.0.0.1:${porta}) ━━${WHITE}\n"
+  if ss -tlnH 2>/dev/null | grep -qE ":${porta}([[:space:]]|$)"; then
+    printf "   ${GREEN}✔ Porta ${porta} está em ESCUTA (LISTENING) no servidor.${WHITE}\n"
+  elif netstat -tln 2>/dev/null | grep -qE ":${porta}[[:space:]]"; then
+    printf "   ${GREEN}✔ Porta ${porta} está em ESCUTA (LISTENING) no servidor.${WHITE}\n"
+  else
+    printf "   ${RED}✘ Porta ${porta} NÃO está escutando no servidor.${WHITE}\n"
+  fi
+  echo
+
+  printf "   ${CYAN}━━ [3] Teste HTTP Local ━━${WHITE}\n"
+  local http_code
+  http_code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 "http://127.0.0.1:${porta}/" 2>/dev/null || echo "000")
+  if [ "$http_code" != "000" ]; then
+    printf "   ${GREEN}✔ Resposta HTTP recebida: Código ${http_code}${WHITE}\n"
+  else
+    printf "   ${YELLOW}⚠ Sem resposta HTTP direta em http://127.0.0.1:${porta}/ (serviço pode estar inicializando).${WHITE}\n"
+  fi
+  echo
+
+  printf "   ${CYAN}━━ [4] Integração com Backend AMANDA ━━${WHITE}\n"
+  local use_oficial="false"
+  if [ -f "${compose_dir}/backend/.env" ]; then
+    use_oficial=$(grep -m1 '^USE_WHATSAPP_OFICIAL=' "${compose_dir}/backend/.env" 2>/dev/null | cut -d '=' -f2- | tr -d '\r')
+  elif [ -f "${compose_dir}/.env" ]; then
+    use_oficial=$(grep -m1 '^USE_WHATSAPP_OFICIAL=' "${compose_dir}/.env" 2>/dev/null | cut -d '=' -f2- | tr -d '\r')
+  fi
+  if [ "$use_oficial" = "true" ]; then
+    printf "   ${GREEN}✔ USE_WHATSAPP_OFICIAL está HABILITADO no Backend (true).${WHITE}\n"
+  else
+    printf "   ${YELLOW}⚠ USE_WHATSAPP_OFICIAL está DESABILITADO ou não definido (${use_oficial}).${WHITE}\n"
+    printf "   ${WHITE}  (Use a Opção [7] no menu para sincronizar com o backend).${WHITE}\n"
+  fi
+
+  echo
+  printf "${WHITE}>> Pressione Enter para voltar ao menu...${WHITE}\n"
+  read -r
+}
+
+# 4. Iniciar / Reiniciar API Oficial (Docker)
+iniciar_reiniciar_api_oficial() {
+  local emp="${1:-${empresa:-amanda}}"
+  local compose_dir="${2:-}"
+  local app_dir="/home/deploy/${emp}"
+  [ -z "$compose_dir" ] && compose_dir=$(localizar_diretorio_compose "${app_dir}")
+
+  # Parar e remover qualquer processo PM2 legado
+  sudo su - deploy -c "pm2 delete api_oficial_${emp} 2>/dev/null || pm2 delete api_oficial 2>/dev/null || true; pm2 save 2>/dev/null || true" 2>/dev/null || true
+
+  local c_oficial
+  c_oficial=$(mf_localizar_container_apioficial "$emp")
+
+  banner
+  printf "${PURPLE} >> Reiniciando contêiner da API Oficial de [%s]...${WHITE}\n" "$emp"
+  if [ -n "$c_oficial" ]; then
+    docker restart "$c_oficial" 2>/dev/null || (cd "${compose_dir}" && docker compose -p "$emp" up -d api_oficial)
+    printf "${GREEN} >> Contêiner ${c_oficial} reiniciado com sucesso!${WHITE}\n"
+  elif [ -f "${compose_dir}/docker-compose.yml" ] && grep -q "api_oficial:" "${compose_dir}/docker-compose.yml" 2>/dev/null; then
+    cd "${compose_dir}" && docker compose -p "$emp" up -d api_oficial
+    printf "${GREEN} >> Serviço api_oficial iniciado no Docker Compose!${WHITE}\n"
+  else
+    printf "${YELLOW} >> Contêiner não encontrado. Executando instalação no Docker...${WHITE}\n"
+    instalar_api_oficial_docker "$emp" "$compose_dir"
+  fi
   sleep 2
 }
 
-# Adicionar função para atualizar API Oficial
-atualizar_api_oficial() {
+# 5. Parar API Oficial (Docker)
+parar_api_oficial() {
+  local emp="${1:-${empresa:-amanda}}"
+  local compose_dir="${2:-}"
+  local app_dir="/home/deploy/${emp}"
+  [ -z "$compose_dir" ] && compose_dir=$(localizar_diretorio_compose "${app_dir}")
+
+  # Parar processo PM2 legado se existir
+  sudo su - deploy -c "pm2 stop api_oficial_${emp} 2>/dev/null || pm2 stop api_oficial 2>/dev/null || true" 2>/dev/null || true
+
+  local c_oficial
+  c_oficial=$(mf_localizar_container_apioficial "$emp")
+
   banner
-  printf "${WHITE} >> Atualizando API Oficial...\n"
-  echo
-  local INSTALADOR_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  local script_path="${INSTALADOR_DIR}/atualizar_apioficial.sh"
-  if [ -f "$script_path" ]; then
-    chmod 775 "$script_path"
-    bash "$script_path"
+  printf "${YELLOW} >> Parando contêiner da API Oficial de [%s]...${WHITE}\n" "$emp"
+  if [ -n "$c_oficial" ]; then
+    docker stop "$c_oficial" 2>/dev/null || true
+    printf "${GREEN} >> Contêiner ${c_oficial} parado com sucesso!${WHITE}\n"
   else
-    printf "${RED} >> Script não encontrado em: $script_path${WHITE}\n"
+    printf "${YELLOW} >> Nenhum contêiner ativo encontrado.${WHITE}\n"
+  fi
+  sleep 2
+}
+
+# 6. Ver Logs em Tempo Real da API Oficial (Docker)
+logs_api_oficial() {
+  local emp="${1:-${empresa:-amanda}}"
+  local compose_dir="${2:-}"
+  local app_dir="/home/deploy/${emp}"
+  [ -z "$compose_dir" ] && compose_dir=$(localizar_diretorio_compose "${app_dir}")
+
+  local c_oficial
+  c_oficial=$(mf_localizar_container_apioficial "$emp")
+
+  banner
+  printf "${PURPLE} >> Exibindo logs do contêiner da API Oficial de [%s] (CTRL+C para sair e voltar ao menu)...\n${WHITE}" "$emp"
+  sleep 2
+
+  if [ -n "$c_oficial" ]; then
+    docker logs -f --tail=100 "$c_oficial"
+  elif [ -f "${compose_dir}/docker-compose.yml" ] && grep -q "api_oficial:" "${compose_dir}/docker-compose.yml" 2>/dev/null; then
+    cd "${compose_dir}" && docker compose -p "$emp" logs -f --tail=100 api_oficial
+  else
+    printf "${RED} >> Nenhum contêiner da API Oficial encontrado para exibir logs.${WHITE}\n"
     sleep 2
   fi
-  printf "${GREEN} >> Processo de atualização da API Oficial finalizado. Voltando ao menu...${WHITE}\n"
-  sleep 2
+}
+
+# 7. Sincronizar Integração com Backend AMANDA
+sincronizar_integracao_backend_api_oficial() {
+  local emp="${1:-${empresa:-amanda}}"
+  local compose_dir="${2:-}"
+  local porta="${3:-6000}"
+  local url="${4:-}"
+  local app_dir="/home/deploy/${emp}"
+  [ -z "$compose_dir" ] && compose_dir=$(localizar_diretorio_compose "${app_dir}")
+
+  banner
+  printf "   ${PURPLE}╔══════════════════════════════════════════════════════════════╗${WHITE}\n"
+  printf "   ${PURPLE}║${WHITE}       SINCRONIZAR INTEGRAÇÃO COM BACKEND AMANDA              ${PURPLE}║${WHITE}\n"
+  printf "   ${PURPLE}╚══════════════════════════════════════════════════════════════╝${WHITE}\n\n"
+
+  if [ -z "$url" ] || [ "$url" = "Não configurada" ]; then
+    printf "${WHITE} >> Informe a URL completa da API Oficial (ex.: https://oficial.dominio.com ou http://IP:${porta}): \n"
+    read -r url
+  fi
+
+  printf "${WHITE} >> Atualizando variáveis de ambiente no Backend AMANDA...${WHITE}\n"
+  sincronizar_porta_env "PORT_APIOFICIAL" "${porta}" "${compose_dir}/.env"
+  [ -f "${compose_dir}/backend/.env" ] && sincronizar_porta_env "PORT_APIOFICIAL" "${porta}" "${compose_dir}/backend/.env"
+
+  sed -i "s|^URL_API_OFICIAL=.*|URL_API_OFICIAL=${url}|" "${compose_dir}/.env" 2>/dev/null || echo "URL_API_OFICIAL=${url}" >> "${compose_dir}/.env"
+  sed -i "s|^USE_WHATSAPP_OFICIAL=.*|USE_WHATSAPP_OFICIAL=true|" "${compose_dir}/.env" 2>/dev/null || echo "USE_WHATSAPP_OFICIAL=true" >> "${compose_dir}/.env"
+  sed -i "s|^TOKEN_API_OFICIAL=.*|TOKEN_API_OFICIAL=adminpro|" "${compose_dir}/.env" 2>/dev/null || echo "TOKEN_API_OFICIAL=adminpro" >> "${compose_dir}/.env"
+
+  if [ -f "${compose_dir}/backend/.env" ]; then
+    sed -i "s|^URL_API_OFICIAL=.*|URL_API_OFICIAL=${url}|" "${compose_dir}/backend/.env" 2>/dev/null || echo "URL_API_OFICIAL=${url}" >> "${compose_dir}/backend/.env"
+    sed -i "s|^USE_WHATSAPP_OFICIAL=.*|USE_WHATSAPP_OFICIAL=true|" "${compose_dir}/backend/.env" 2>/dev/null || echo "USE_WHATSAPP_OFICIAL=true" >> "${compose_dir}/backend/.env"
+    sed -i "s|^TOKEN_API_OFICIAL=.*|TOKEN_API_OFICIAL=adminpro|" "${compose_dir}/backend/.env" 2>/dev/null || echo "TOKEN_API_OFICIAL=adminpro" >> "${compose_dir}/backend/.env"
+  fi
+
+  printf "${WHITE} >> Reiniciando contêiner do Backend AMANDA...${WHITE}\n"
+  local be_c
+  be_c=$(docker ps --format '{{.Names}}' | grep -E "^${emp}_backend" | head -n 1)
+  [ -n "$be_c" ] && docker restart "$be_c" 2>/dev/null || true
+
+  printf "\n${GREEN} >> Integração sincronizada com sucesso! O Backend agora reconhece a API Oficial.${WHITE}\n\n"
+  printf "${WHITE}>> Pressione Enter para voltar ao menu...${WHITE}\n"
+  read -r
+}
+
+# 9. Desinstalar API Oficial
+desinstalar_api_oficial() {
+  local emp="${1:-${empresa:-amanda}}"
+  local compose_dir="${2:-}"
+  local app_dir="/home/deploy/${emp}"
+  [ -z "$compose_dir" ] && compose_dir=$(localizar_diretorio_compose "${app_dir}")
+
+  banner
+  printf "   ${RED}╔══════════════════════════════════════════════════════════════╗${WHITE}\n"
+  printf "   ${RED}║${WHITE}                 DESINSTALAR API OFICIAL                      ${RED}║${WHITE}\n"
+  printf "   ${RED}╚══════════════════════════════════════════════════════════════╝${WHITE}\n\n"
+  printf "   ${WHITE}Instância alvo: ${GREEN}%s${WHITE}\n\n" "$emp"
+  printf "${RED} >> ATENÇÃO: Esta ação irá parar e desvincular a API Oficial da plataforma AMANDA.${WHITE}\n"
+  printf "${WHITE} >> Deseja realmente prosseguir com a desinstalação? (S/N): ${WHITE}"
+  read -r confirma_desinstalar
+  confirma_desinstalar=$(echo "${confirma_desinstalar}" | tr '[:lower:]' '[:upper:]')
+  if [ "${confirma_desinstalar}" != "S" ]; then
+    printf "${GREEN} >> Operação cancelada. Nenhuma alteração realizada.${WHITE}\n"
+    sleep 2
+    return 0
+  fi
+
+  # 9.1 Parar e remover contêiner Docker (se existir)
+  local c_oficial
+  c_oficial=$(mf_localizar_container_apioficial "$emp")
+  if [ -n "$c_oficial" ]; then
+    printf "${PURPLE} >> Parando e removendo contêiner Docker ${c_oficial}...${WHITE}\n"
+    docker stop "$c_oficial" 2>/dev/null || true
+    docker rm -f "$c_oficial" 2>/dev/null || true
+  fi
+
+  # 9.2 Remover processo PM2 (se existir)
+  sudo su - deploy -c "pm2 delete api_oficial_${emp} 2>/dev/null || pm2 delete api_oficial 2>/dev/null || true; pm2 save 2>/dev/null || true" 2>/dev/null || true
+
+  # 9.3 Remover api_oficial do docker-compose.yml
+  if [ -f "${compose_dir}/docker-compose.yml" ]; then
+    printf "${PURPLE} >> Removendo serviço api_oficial do docker-compose.yml...${WHITE}\n"
+    python3 - "${compose_dir}/docker-compose.yml" << 'PYREM'
+import sys, re
+compose_file = sys.argv[1]
+with open(compose_file, "r", encoding="utf-8") as f:
+    content = f.read()
+
+if "api_oficial:" in content:
+    content = re.sub(r'\n[ ]{2}#?[^\n]*API OFICIAL[^\n]*\n[ ]{2}api_oficial:\n(?:[ ]{4,}.*\n)*', '\n', content)
+    content = re.sub(r'^[ ]{2}api_oficial:\n(?:[ ]{4,}.*\n)*', '', content, flags=re.M)
+
+with open(compose_file, "w", encoding="utf-8") as f:
+    f.write(content)
+PYREM
+  fi
+
+  # 9.4 Desativar integração no backend da AMANDA
+  printf "${PURPLE} >> Desativando integração da API Oficial no backend AMANDA...${WHITE}\n"
+  sed -i "s|^USE_WHATSAPP_OFICIAL=.*|USE_WHATSAPP_OFICIAL=false|" "${compose_dir}/.env" 2>/dev/null || true
+  sed -i "s|^URL_API_OFICIAL=.*|URL_API_OFICIAL=|" "${compose_dir}/.env" 2>/dev/null || true
+  if [ -f "${compose_dir}/backend/.env" ]; then
+    sed -i "s|^USE_WHATSAPP_OFICIAL=.*|USE_WHATSAPP_OFICIAL=false|" "${compose_dir}/backend/.env" 2>/dev/null || true
+    sed -i "s|^URL_API_OFICIAL=.*|URL_API_OFICIAL=|" "${compose_dir}/backend/.env" 2>/dev/null || true
+  fi
+
+  # Reiniciar backend AMANDA
+  local be_c
+  be_c=$(docker ps --format '{{.Names}}' | grep -E "^${emp}_backend" | head -n 1)
+  [ -n "$be_c" ] && docker restart "$be_c" 2>/dev/null || true
+
+  # 9.5 Remover proxy reverso Nginx
+  if [ -f "/etc/nginx/sites-available/${emp}-oficial" ] || [ -f "/etc/nginx/sites-enabled/${emp}-oficial" ]; then
+    printf "${PURPLE} >> Removendo configuração Nginx...${WHITE}\n"
+    rm -f "/etc/nginx/sites-available/${emp}-oficial" "/etc/nginx/sites-enabled/${emp}-oficial" 2>/dev/null || true
+    systemctl reload nginx 2>/dev/null || true
+  fi
+
+  # 9.6 Perguntar se deseja apagar banco de dados
+  printf "\n${YELLOW} >> Deseja também EXCLUIR o banco de dados 'api_oficial' do PostgreSQL? (S/N): ${WHITE}"
+  read -r del_banco
+  del_banco=$(echo "${del_banco}" | tr '[:lower:]' '[:upper:]')
+  if [ "${del_banco}" = "S" ]; then
+    local pg_c
+    pg_c=$(docker ps --format '{{.Names}}' | grep -E "^${emp}_postgres" | head -n 1)
+    [ -z "$pg_c" ] && pg_c=$(docker ps --format '{{.Names}}' | grep -E "${emp}.*postgres" | head -n 1)
+    [ -z "$pg_c" ] && pg_c=$(docker ps --format '{{.Names}}' | grep -E "postgres" | head -n 1)
+    if [ -n "$pg_c" ]; then
+      docker exec -e PGPASSWORD="${senha_deploy:-Acertitech13@}" "$pg_c" psql -U "${emp}" -d postgres -c "DROP DATABASE \"api_oficial\";" 2>/dev/null || true
+      printf "${GREEN} >> Banco 'api_oficial' removido do PostgreSQL Docker.${WHITE}\n"
+    elif command -v psql >/dev/null 2>&1; then
+      PGPASSWORD="${senha_deploy:-Acertitech13@}" psql -h 127.0.0.1 -p "${PORT_DB:-5432}" -U "${emp}" -d postgres -c "DROP DATABASE \"api_oficial\";" 2>/dev/null || true
+      printf "${GREEN} >> Banco 'api_oficial' removido do PostgreSQL local.${WHITE}\n"
+    fi
+  else
+    printf "${CYAN} >> Banco de dados 'api_oficial' preservado com segurança.${WHITE}\n"
+  fi
+
+  printf "\n${GREEN} >> API Oficial desinstalada com sucesso e plataforma AMANDA atualizada!${WHITE}\n\n"
+  printf "${WHITE}>> Pressione Enter para voltar ao menu...${WHITE}\n"
+  read -r
+}
+
+# Funções legadas/wrappers para compatibilidade com chamadas existentes
+instalar_api_oficial() {
+  menu_gerenciar_api_oficial
+}
+
+atualizar_api_oficial() {
+  atualizar_api_oficial_gerenciador
 }
 
 # Adicionar função para migrar para Multiflow-PRO
@@ -11216,7 +11758,7 @@ if [ "${1:-}" = "--executar-instalacao-alta-performance" ]; then
   [ -f "ALTA_PERFORMANCE_MODE" ] && source "ALTA_PERFORMANCE_MODE" 2>/dev/null
   [ -f "$ARQUIVO_VARIAVEIS" ] && source "$ARQUIVO_VARIAVEIS" 2>/dev/null
   export ALTA_PERFORMANCE=1
-  instalacao_base || exit 1
+  instalar_amanda_docker_stack || exit 1
   exit 0
 fi
 

@@ -330,23 +330,27 @@ else
   echo
 fi
 
-printf "${WHITE} >> 🔄 Reiniciando aplicações com PM2...${WHITE}\n"
+printf "${WHITE} >> 🔄 Reiniciando aplicações...${WHITE}\n"
 echo
 
-sudo su - deploy <<RESTARTPM2
-# Configura PATH para Node.js e PM2
+if docker ps --format '{{.Names}}' 2>/dev/null | grep -qE "^${empresa}_(backend|frontend)"; then
+  docker restart "${empresa}_backend" "${empresa}_frontend" 2>/dev/null || true
+  printf "${GREEN} >> Contêineres backend e frontend reiniciados via Docker.${WHITE}\n"
+elif command -v pm2 >/dev/null 2>&1 || sudo su - deploy -c "command -v pm2" >/dev/null 2>&1; then
+  sudo su - deploy <<RESTARTPM2
 if [ -d /usr/local/n/versions/node/20.19.4/bin ]; then
   export PATH=/usr/local/n/versions/node/20.19.4/bin:/usr/bin:/usr/local/bin:\$PATH
 else
   export PATH=/usr/bin:/usr/local/bin:\$PATH
 fi
 
-pm2 flush
-pm2 restart ${empresa}-backend
-pm2 restart ${empresa}-frontend
-pm2 reset all
-pm2 save
+pm2 flush 2>/dev/null || true
+pm2 restart ${empresa}-backend 2>/dev/null || true
+pm2 restart ${empresa}-frontend 2>/dev/null || true
+pm2 reset all 2>/dev/null || true
+pm2 save 2>/dev/null || true
 RESTARTPM2
+fi
 
 echo
 printf "${GREEN} >> ✨ Push Notifications instalado com sucesso na instância ${empresa}!${WHITE}\n"

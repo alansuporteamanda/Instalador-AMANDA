@@ -217,6 +217,12 @@ pm2_reiniciar_instancia() {
   local emp="${1:-$empresa}"
   local fe_port=3000
 
+  # Prioridade 1: Contêineres Docker
+  if docker ps -a --format '{{.Names}}' 2>/dev/null | grep -qE "^${emp}_(backend|frontend)"; then
+    docker restart "${emp}_backend" "${emp}_frontend" "${emp}_transcricao" "${emp}_apioficial" 2>/dev/null || true
+    return 0
+  fi
+
   if [ -f "/home/deploy/${emp}/frontend/.env" ]; then
     fe_port=$(grep -m1 '^SERVER_PORT=' "/home/deploy/${emp}/frontend/.env" 2>/dev/null | cut -d= -f2- | tr -d '\r' | tr -d ' ')
     if [ -z "$fe_port" ]; then
@@ -527,6 +533,10 @@ roolback_carregar_lib_tela_frontend() {
 
 pm2_reiniciar_frontend_instancia() {
   local emp="${1:-$empresa}"
+  if docker ps -a --format '{{.Names}}' 2>/dev/null | grep -qE "^${emp}_frontend"; then
+    docker restart "${emp}_frontend" 2>/dev/null || true
+    return 0
+  fi
   sudo su - deploy <<RESTARTFE
 export PATH="/usr/local/bin:/usr/bin:\${PATH:-}"
 if [ -d /usr/local/n/versions/node/20.19.4/bin ]; then
@@ -549,6 +559,7 @@ RESTARTFE
 # Para backend/API/transcricao; mantem frontend com tela de manutencao
 pm2_parar_instancia_sem_frontend() {
   local emp="${1:-$empresa}"
+  docker stop "${emp}_backend" "${emp}_transcricao" "${emp}_apioficial" 2>/dev/null || true
   sudo su - deploy <<STOPPM2
 export PATH="/usr/local/bin:/usr/bin:\${PATH:-}"
 if [ -d /usr/local/n/versions/node/20.19.4/bin ]; then

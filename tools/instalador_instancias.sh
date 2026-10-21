@@ -1016,11 +1016,9 @@ verificar_dependencias_sistema() {
   
   # Verificar se PM2 está instalado
   if ! command -v pm2 >/dev/null 2>&1; then
-    printf "${YELLOW} >> PM2 não encontrado. Será necessário instalar.${WHITE}\n"
-    printf "${YELLOW} >> Por favor, execute o instalador_single.sh primeiro ou instale PM2 manualmente.${WHITE}\n"
-    sleep 3
+    printf "${GREEN} >> Modo 100%% Docker: PM2 nativo dispensado.${WHITE}\n"
   else
-    printf "${GREEN} >> PM2 já está instalado.${WHITE}\n"
+    printf "${GREEN} >> PM2 já está instalado no servidor.${WHITE}\n"
   fi
   
   # Verificar se Nginx ou Traefik está instalado (dependendo da escolha)
@@ -1735,25 +1733,15 @@ SEEDINSTALL
     sleep 2
 
     banner
-    printf "${WHITE} >> Iniciando pm2 ${BLUE}backend${WHITE}...\n"
+    printf "${WHITE} >> Iniciando serviço ${BLUE}backend${WHITE}...\n"
     echo
-    sudo su - deploy <<PM2BACKEND
-  if [ -d /usr/local/n/versions/node/20.19.4/bin ]; then
-    export PATH=/usr/local/n/versions/node/20.19.4/bin:/usr/bin:/usr/local/bin:\$PATH
-  else
-    export PATH=/usr/bin:/usr/local/bin:\$PATH
-  fi
-  
-  BACKEND_DIR="/home/deploy/${nova_empresa}/backend"
-  cd "\$BACKEND_DIR"
-  
-  if [ ! -f "dist/server.js" ]; then
-    echo "ERRO: Arquivo dist/server.js não encontrado. O build pode ter falhado."
-    exit 1
-  fi
-  
-  pm2 start dist/server.js --name ${nova_empresa}-backend
-PM2BACKEND
+    local compose_dir="/home/deploy/${nova_empresa}"
+    [ -d "/home/deploy/${nova_empresa}/amanda" ] && compose_dir="/home/deploy/${nova_empresa}/amanda"
+    if [ -f "${compose_dir}/docker-compose.yml" ]; then
+      cd "${compose_dir}" && docker compose -p "${nova_empresa}" up -d backend
+    elif command -v pm2 >/dev/null 2>&1; then
+      sudo su - deploy -c "cd /home/deploy/${nova_empresa}/backend && pm2 start dist/server.js --name ${nova_empresa}-backend 2>/dev/null || true"
+    fi
 
     sleep 2
   } || trata_erro "instala_backend_instancia"
@@ -1840,26 +1828,15 @@ FRONTENDBUILD
     sleep 2
 
     banner
-    printf "${WHITE} >> Iniciando pm2 ${BLUE}frontend${WHITE}...\n"
+    printf "${WHITE} >> Iniciando serviço ${BLUE}frontend${WHITE}...\n"
     echo
-    sudo su - deploy <<PM2FRONTEND
-  if [ -d /usr/local/n/versions/node/20.19.4/bin ]; then
-    export PATH=/usr/local/n/versions/node/20.19.4/bin:/usr/bin:/usr/local/bin:\$PATH
-  else
-    export PATH=/usr/bin:/usr/local/bin:\$PATH
-  fi
-  
-  FRONTEND_DIR="/home/deploy/${nova_empresa}/frontend"
-  cd "\$FRONTEND_DIR"
-  
-  if [ ! -f "server.js" ]; then
-    echo "ERRO: Arquivo server.js não encontrado em \$FRONTEND_DIR"
-    exit 1
-  fi
-  
-  pm2 start server.js --name ${nova_empresa}-frontend
-  pm2 save
-PM2FRONTEND
+    local compose_dir="/home/deploy/${nova_empresa}"
+    [ -d "/home/deploy/${nova_empresa}/amanda" ] && compose_dir="/home/deploy/${nova_empresa}/amanda"
+    if [ -f "${compose_dir}/docker-compose.yml" ]; then
+      cd "${compose_dir}" && docker compose -p "${nova_empresa}" up -d frontend
+    elif command -v pm2 >/dev/null 2>&1; then
+      sudo su - deploy -c "cd /home/deploy/${nova_empresa}/frontend && pm2 start server.js --name ${nova_empresa}-frontend 2>/dev/null && pm2 save 2>/dev/null || true"
+    fi
 
     sleep 2
   } || trata_erro "instala_frontend_instancia"
@@ -2094,17 +2071,16 @@ EOF
     empresa="${nova_empresa}"
     mf_frontend_carregar_lib && mf_frontend_garantir_porta_env "${nova_frontend_port}" || true
 
-    sudo su - deploy <<RESTARTPM2
-  if [ -d /usr/local/n/versions/node/20.19.4/bin ]; then
-    export PATH=/usr/local/n/versions/node/20.19.4/bin:/usr/bin:/usr/local/bin:\$PATH
-  else
-    export PATH=/usr/bin:/usr/local/bin:\$PATH
-  fi
+    if docker ps --format '{{.Names}}' 2>/dev/null | grep -qE "^${nova_empresa}_(backend|frontend)"; then
+      docker restart "${nova_empresa}_backend" "${nova_empresa}_frontend" 2>/dev/null || true
+    elif command -v pm2 >/dev/null 2>&1 || sudo su - deploy -c "command -v pm2" >/dev/null 2>&1; then
+      sudo su - deploy <<RESTARTPM2
   empresa="${nova_empresa}"
   pm2 restart ${nova_empresa}-backend 2>/dev/null || true
   PORT="${nova_frontend_port}" pm2 restart ${nova_empresa}-frontend --update-env 2>/dev/null \
     || pm2 restart ${nova_empresa}-frontend 2>/dev/null || true
 RESTARTPM2
+    fi
 
     sleep 2
   } || trata_erro "config_latencia_instancia"
