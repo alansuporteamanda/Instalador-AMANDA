@@ -1068,13 +1068,25 @@ URL_API_OFICIAL=${subdominio_oficial}
 RABBITMQ_ENABLED_GLOBAL=false
 TZ=America/Sao_Paulo
 EOF
-    # Garante a existência do diretório public para não quebrar o build do Dockerfile da API Oficial
+    # Garante a existência do diretório public e Dockerfile com compatibilidade CommonJS
     mkdir -p "${compose_dir}/api_oficial/public"
     touch "${compose_dir}/api_oficial/public/.gitkeep"
-    if [ -f "${compose_dir}/api_oficial/Dockerfile" ]; then
-      grep -q "mkdir -p /app/public" "${compose_dir}/api_oficial/Dockerfile" || sed -i 's|WORKDIR /app|WORKDIR /app\nRUN mkdir -p /app/public|' "${compose_dir}/api_oficial/Dockerfile" 2>/dev/null || true
-      grep -q "prisma@5.14.0" "${compose_dir}/api_oficial/Dockerfile" || sed -i 's|RUN npm install --production$|RUN npm install --production \&\& npm install prisma@5.14.0|' "${compose_dir}/api_oficial/Dockerfile" 2>/dev/null || true
+    if [ -f "${compose_dir}/api_oficial/package.json" ]; then
+      sed -i 's|"@nestjs/mapped-types": "[^"]*"|"@nestjs/mapped-types": "2.0.5"|g' "${compose_dir}/api_oficial/package.json" 2>/dev/null || true
     fi
+    cat << 'EOF_API_DF' > "${compose_dir}/api_oficial/Dockerfile"
+FROM node:20-alpine
+WORKDIR /app
+RUN apk add --no-cache openssl
+COPY package*.json ./
+RUN sed -i 's/"@nestjs\/mapped-types": "[^"]*"/"@nestjs\/mapped-types": "2.0.5"/g' package.json 2>/dev/null || true
+RUN npm install --production && npm install prisma@5.14.0 @nestjs/mapped-types@2.0.5
+COPY . .
+RUN mkdir -p /app/public
+RUN npx prisma generate
+EXPOSE 6000
+CMD ["node", "dist/main.js"]
+EOF_API_DF
   fi
 
   # Assegurar Dockerfiles para que todas as imagens sejam construídas e tagueadas com o nome da empresa
@@ -10794,28 +10806,26 @@ instalar_api_oficial_docker() {
     printf "${GREEN} >> Banco 'api_oficial' configurado via PostgreSQL local!${WHITE}\n"
   fi
 
-  # 1.5 Assegurar Dockerfile e estrutura de pastas
+  # 1.5 Assegurar Dockerfile, compatibilidade CommonJS (@nestjs/mapped-types@2.0.5) e pastas
   mkdir -p "${compose_dir}/api_oficial/public"
   touch "${compose_dir}/api_oficial/public/.gitkeep"
-  if [ ! -f "${compose_dir}/api_oficial/Dockerfile" ]; then
-    printf "${WHITE} >> Criando Dockerfile otimizado para API Oficial...${WHITE}\n"
-    cat << 'EOF_API_DF' > "${compose_dir}/api_oficial/Dockerfile"
+  if [ -f "${compose_dir}/api_oficial/package.json" ]; then
+    sed -i 's|"@nestjs/mapped-types": "[^"]*"|"@nestjs/mapped-types": "2.0.5"|g' "${compose_dir}/api_oficial/package.json" 2>/dev/null || true
+  fi
+  printf "${WHITE} >> Criando/atualizando Dockerfile da API Oficial (Node 20 + fix @nestjs/mapped-types CommonJS)...${WHITE}\n"
+  cat << 'EOF_API_DF' > "${compose_dir}/api_oficial/Dockerfile"
 FROM node:20-alpine
 WORKDIR /app
 RUN apk add --no-cache openssl
 COPY package*.json ./
-RUN npm install --production && npm install prisma@5.14.0
+RUN sed -i 's/"@nestjs\/mapped-types": "[^"]*"/"@nestjs\/mapped-types": "2.0.5"/g' package.json 2>/dev/null || true
+RUN npm install --production && npm install prisma@5.14.0 @nestjs/mapped-types@2.0.5
 COPY . .
 RUN mkdir -p /app/public
 RUN npx prisma generate
-RUN npm run build
 EXPOSE 6000
 CMD ["node", "dist/main.js"]
 EOF_API_DF
-  else
-    grep -q "mkdir -p /app/public" "${compose_dir}/api_oficial/Dockerfile" || sed -i 's|WORKDIR /app|WORKDIR /app\nRUN mkdir -p /app/public|' "${compose_dir}/api_oficial/Dockerfile" 2>/dev/null || true
-    grep -q "prisma@5.14.0" "${compose_dir}/api_oficial/Dockerfile" || sed -i 's|RUN npm install --production$|RUN npm install --production \&\& npm install prisma@5.14.0|' "${compose_dir}/api_oficial/Dockerfile" 2>/dev/null || true
-  fi
 
   # 1.6 Configurar arquivo .env da API Oficial
   printf "${WHITE} >> Configurando arquivo .env da API Oficial...${WHITE}\n"
@@ -11035,6 +11045,22 @@ atualizar_api_oficial_gerenciador() {
 
   mkdir -p "${compose_dir}/api_oficial/public"
   touch "${compose_dir}/api_oficial/public/.gitkeep"
+  if [ -f "${compose_dir}/api_oficial/package.json" ]; then
+    sed -i 's|"@nestjs/mapped-types": "[^"]*"|"@nestjs/mapped-types": "2.0.5"|g' "${compose_dir}/api_oficial/package.json" 2>/dev/null || true
+  fi
+  cat << 'EOF_API_DF' > "${compose_dir}/api_oficial/Dockerfile"
+FROM node:20-alpine
+WORKDIR /app
+RUN apk add --no-cache openssl
+COPY package*.json ./
+RUN sed -i 's/"@nestjs\/mapped-types": "[^"]*"/"@nestjs\/mapped-types": "2.0.5"/g' package.json 2>/dev/null || true
+RUN npm install --production && npm install prisma@5.14.0 @nestjs/mapped-types@2.0.5
+COPY . .
+RUN mkdir -p /app/public
+RUN npx prisma generate
+EXPOSE 6000
+CMD ["node", "dist/main.js"]
+EOF_API_DF
 
   # Garantir serviço api_oficial no docker-compose.yml se não estiver
   if [ -f "${compose_dir}/docker-compose.yml" ] && ! grep -q "api_oficial:" "${compose_dir}/docker-compose.yml"; then
