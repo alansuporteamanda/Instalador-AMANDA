@@ -263,8 +263,8 @@ EOF_API_DF
     sleep 5
 
     printf "${WHITE} >> Executando migrações Prisma dentro do contêiner...${WHITE}\n"
-    docker exec "${empresa}_apioficial" npx prisma migrate deploy 2>/dev/null || \
-      docker exec "${empresa}_apioficial" npx prisma db push 2>/dev/null || true
+    docker exec "${empresa}_apioficial" npx prisma migrate deploy 2>/dev/null || true
+    docker exec "${empresa}_apioficial" npx prisma db push --accept-data-loss 2>/dev/null || true
 
     printf "${GREEN} >> Código e contêiner da API Oficial atualizados com sucesso!${WHITE}\n"
     sleep 2

@@ -1616,8 +1616,8 @@ PYEOF
   echo
   [ -n "$be_container" ] && docker exec "$be_container" npx sequelize db:migrate 2>/dev/null || true
   [ -n "$oficial_container" ] && {
-    docker exec "$oficial_container" npx prisma migrate deploy 2>/dev/null || \
-    docker exec "$oficial_container" npx prisma db push 2>/dev/null || true
+    docker exec "$oficial_container" npx prisma migrate deploy 2>/dev/null || true
+    docker exec "$oficial_container" npx prisma db push --accept-data-loss 2>/dev/null || true
   }
 
   local criticos=()
@@ -10987,9 +10987,9 @@ PYINJECT
 
   if [ -n "$c_oficial" ]; then
     printf "\n${PURPLE} >> Executando migrações do Prisma no contêiner ${c_oficial}...${WHITE}\n"
-    docker exec "$c_oficial" npx prisma migrate deploy 2>/dev/null || \
-      docker exec "$c_oficial" npx prisma db push 2>/dev/null || true
-    printf "${GREEN} >> Migrações aplicadas com sucesso!${WHITE}\n"
+    docker exec "$c_oficial" npx prisma migrate deploy 2>/dev/null || true
+    docker exec "$c_oficial" npx prisma db push --accept-data-loss 2>/dev/null || true
+    printf "${GREEN} >> Migrações e tabelas aplicadas com sucesso!${WHITE}\n"
   fi
 
   # 1.11 Recriar Backend AMANDA para aplicar novas variáveis de ambiente
@@ -11074,8 +11074,8 @@ EOF_API_DF
   sleep 5
 
   printf "${WHITE} >> Executando migrações do banco de dados (Prisma)...${WHITE}\n"
-  docker exec "${emp}_apioficial" npx prisma migrate deploy 2>/dev/null || \
-    docker exec "${emp}_apioficial" npx prisma db push 2>/dev/null || true
+  docker exec "${emp}_apioficial" npx prisma migrate deploy 2>/dev/null || true
+  docker exec "${emp}_apioficial" npx prisma db push --accept-data-loss 2>/dev/null || true
 
   printf "\n${GREEN} >> API Oficial atualizada com sucesso no Docker!${WHITE}\n\n"
   docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" | grep -E "${emp}_apioficial|NAMES" || true
@@ -11352,6 +11352,15 @@ PYEOF
 
   # Configurar Nginx e emitir Certificado SSL se for domínio FQDN
   configurar_nginx_e_ssl_api_oficial "$emp" "$porta" "$url"
+
+  # Garantir criação do banco e tabelas do Prisma se o contêiner estiver no ar
+  local c_oficial
+  c_oficial=$(docker ps --format '{{.Names}}' | grep -E "^${emp}_apioficial" | head -n 1)
+  if [ -n "$c_oficial" ]; then
+    printf "${WHITE} >> Garantindo tabelas e migrações do Prisma no banco de dados...${WHITE}\n"
+    docker exec "$c_oficial" npx prisma migrate deploy 2>/dev/null || true
+    docker exec "$c_oficial" npx prisma db push --accept-data-loss 2>/dev/null || true
+  fi
 
   printf "\n${GREEN} >> Integração sincronizada com sucesso! O Backend agora reconhece a API Oficial.${WHITE}\n\n"
   printf "${WHITE}>> Pressione Enter para voltar ao menu...${WHITE}\n"

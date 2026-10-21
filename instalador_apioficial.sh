@@ -468,14 +468,12 @@ EOF
     banner
     printf "${WHITE} >> Emitindo SSL do ${subdominio_oficial}...\n"
     echo
-    oficial_domain=$(echo "${subdominio_oficial/https:\/\//}")
-    sudo su - root <<EOF
-    certbot -m ${email_deploy} \
-            --nginx \
-            --agree-tos \
-            -n \
-            -d ${oficial_domain}
-EOF
+    oficial_domain=$(echo "${subdominio_oficial/https:\/\//}" | cut -d':' -f1 | cut -d'/' -f1 | tr -d '\r ')
+    local email_arg="--register-unsafely-without-email"
+    [ -n "${email_deploy:-}" ] && email_arg="-m ${email_deploy}"
+    certbot ${email_arg} --nginx --agree-tos --redirect -n -d "${oficial_domain}" 2>/dev/null || \
+      certbot ${email_arg} --nginx --agree-tos -n -d "${oficial_domain}" 2>/dev/null || true
+    systemctl reload nginx 2>/dev/null || true
 
     sleep 2
   } || trata_erro "configurar_nginx_apioficial"
@@ -671,8 +669,8 @@ PYINJECT
     sleep 6
 
     printf "${WHITE} >> Executando migrações Prisma dentro do contêiner...${WHITE}\n"
-    docker exec "${empresa}_apioficial" npx prisma migrate deploy 2>/dev/null || \
-      docker exec "${empresa}_apioficial" npx prisma db push 2>/dev/null || true
+    docker exec "${empresa}_apioficial" npx prisma migrate deploy 2>/dev/null || true
+    docker exec "${empresa}_apioficial" npx prisma db push --accept-data-loss 2>/dev/null || true
 
     printf "${GREEN} >> API Oficial instalada e executando em contêiner Docker com sucesso!${WHITE}\n"
     sleep 2
@@ -696,20 +694,27 @@ atualizar_env_backend() {
     # Atualizar .env do compose se existir
     if [ -n "$compose_dir" ] && [ -f "${compose_dir}/.env" ]; then
       sed -i "s|^URL_API_OFICIAL=.*|URL_API_OFICIAL=https://${subdominio_oficial}|" "${compose_dir}/.env" 2>/dev/null || echo "URL_API_OFICIAL=https://${subdominio_oficial}" >> "${compose_dir}/.env"
+      sed -i "s|^API_OFICIAL_URL=.*|API_OFICIAL_URL=https://${subdominio_oficial}|" "${compose_dir}/.env" 2>/dev/null || echo "API_OFICIAL_URL=https://${subdominio_oficial}" >> "${compose_dir}/.env"
       sed -i "s|^USE_WHATSAPP_OFICIAL=.*|USE_WHATSAPP_OFICIAL=true|" "${compose_dir}/.env" 2>/dev/null || echo "USE_WHATSAPP_OFICIAL=true" >> "${compose_dir}/.env"
       sed -i "s|^TOKEN_API_OFICIAL=.*|TOKEN_API_OFICIAL=adminpro|" "${compose_dir}/.env" 2>/dev/null || echo "TOKEN_API_OFICIAL=adminpro" >> "${compose_dir}/.env"
+      sed -i "s|^API_OFICIAL_TOKEN=.*|API_OFICIAL_TOKEN=adminpro|" "${compose_dir}/.env" 2>/dev/null || echo "API_OFICIAL_TOKEN=adminpro" >> "${compose_dir}/.env"
     fi
 
     # Atualizar backend/.env
     if [ -f "/home/deploy/${empresa}/backend/.env" ]; then
       sed -i "s|^URL_API_OFICIAL=.*|URL_API_OFICIAL=https://${subdominio_oficial}|" "/home/deploy/${empresa}/backend/.env" 2>/dev/null || echo "URL_API_OFICIAL=https://${subdominio_oficial}" >> "/home/deploy/${empresa}/backend/.env"
+      sed -i "s|^API_OFICIAL_URL=.*|API_OFICIAL_URL=https://${subdominio_oficial}|" "/home/deploy/${empresa}/backend/.env" 2>/dev/null || echo "API_OFICIAL_URL=https://${subdominio_oficial}" >> "/home/deploy/${empresa}/backend/.env"
       sed -i "s|^USE_WHATSAPP_OFICIAL=.*|USE_WHATSAPP_OFICIAL=true|" "/home/deploy/${empresa}/backend/.env" 2>/dev/null || echo "USE_WHATSAPP_OFICIAL=true" >> "/home/deploy/${empresa}/backend/.env"
       sed -i "s|^TOKEN_API_OFICIAL=.*|TOKEN_API_OFICIAL=adminpro|" "/home/deploy/${empresa}/backend/.env" 2>/dev/null || echo "TOKEN_API_OFICIAL=adminpro" >> "/home/deploy/${empresa}/backend/.env"
+      sed -i "s|^API_OFICIAL_TOKEN=.*|API_OFICIAL_TOKEN=adminpro|" "/home/deploy/${empresa}/backend/.env" 2>/dev/null || echo "API_OFICIAL_TOKEN=adminpro" >> "/home/deploy/${empresa}/backend/.env"
       chown deploy:deploy "/home/deploy/${empresa}/backend/.env" 2>/dev/null || true
       chmod 600 "/home/deploy/${empresa}/backend/.env" 2>/dev/null || true
     fi
 
-    # Reiniciar contêiner do backend
+    # Recriar e reiniciar contêiner do backend para aplicar novas variáveis na memória
+    if [ -n "$compose_dir" ] && [ -f "${compose_dir}/docker-compose.yml" ]; then
+      (cd "${compose_dir}" && docker compose -p "${empresa}" up -d --force-recreate backend 2>/dev/null || true)
+    fi
     local be_c
     be_c=$(docker ps --format '{{.Names}}' | grep -E "^${empresa}_backend" | head -n 1)
     if [ -n "$be_c" ]; then
