@@ -854,16 +854,17 @@ testar_porta_tcp_ocupada() {
 
 proxima_porta_livre() {
   local p="$1"
+  local ignorar="${2:-}"
   while testar_porta_tcp_ocupada "$p" || \
-        [ "$p" = "${backend_port:-}" ] || \
-        [ "$p" = "${frontend_port:-}" ] || \
-        [ "$p" = "${PORT_DB:-}" ] || \
-        [ "$p" = "${PORT_REDIS:-}" ] || \
-        [ "$p" = "${PORT_PGBOUNCER:-}" ] || \
-        [ "$p" = "${PORT_TRANSCRIBER:-}" ] || \
-        [ "$p" = "${PORT_WUZAPI:-}" ] || \
-        [ "$p" = "${PORT_DISPATCHER:-}" ] || \
-        [ "$p" = "${PORT_APIOFICIAL:-}" ]; do
+        { [ -n "${backend_port:-}" ] && [ "$p" = "${backend_port}" ] && [ "$ignorar" != "backend_port" ]; } || \
+        { [ -n "${frontend_port:-}" ] && [ "$p" = "${frontend_port}" ] && [ "$ignorar" != "frontend_port" ]; } || \
+        { [ -n "${PORT_DB:-}" ] && [ "$p" = "${PORT_DB}" ] && [ "$ignorar" != "PORT_DB" ]; } || \
+        { [ -n "${PORT_REDIS:-}" ] && [ "$p" = "${PORT_REDIS}" ] && [ "$ignorar" != "PORT_REDIS" ]; } || \
+        { [ -n "${PORT_PGBOUNCER:-}" ] && [ "$p" = "${PORT_PGBOUNCER}" ] && [ "$ignorar" != "PORT_PGBOUNCER" ]; } || \
+        { [ -n "${PORT_TRANSCRIBER:-}" ] && [ "$p" = "${PORT_TRANSCRIBER}" ] && [ "$ignorar" != "PORT_TRANSCRIBER" ]; } || \
+        { [ -n "${PORT_WUZAPI:-}" ] && [ "$p" = "${PORT_WUZAPI}" ] && [ "$ignorar" != "PORT_WUZAPI" ]; } || \
+        { [ -n "${PORT_DISPATCHER:-}" ] && [ "$p" = "${PORT_DISPATCHER}" ] && [ "$ignorar" != "PORT_DISPATCHER" ]; } || \
+        { [ -n "${PORT_APIOFICIAL:-}" ] && [ "$p" = "${PORT_APIOFICIAL}" ] && [ "$ignorar" != "PORT_APIOFICIAL" ]; }; do
     p=$((p + 1))
   done
   printf '%s\n' "$p"
@@ -10623,17 +10624,18 @@ menu_gerenciar_api_oficial() {
       modo_execucao="Inativo"
     fi
 
-    # Obter porta da API Oficial
-    local porta_oficial="${PORT_APIOFICIAL:-6000}"
-    if [ -f "${compose_dir}/api_oficial/.env" ]; then
-      local p_env
-      p_env=$(grep -m1 '^PORT=' "${compose_dir}/api_oficial/.env" 2>/dev/null | cut -d '=' -f2- | tr -d '\r')
-      [ -n "$p_env" ] && porta_oficial="$p_env"
-    elif [ -f "/home/deploy/${emp}/api_oficial/.env" ]; then
-      local p_env
-      p_env=$(grep -m1 '^PORT=' "/home/deploy/${emp}/api_oficial/.env" 2>/dev/null | cut -d '=' -f2- | tr -d '\r')
-      [ -n "$p_env" ] && porta_oficial="$p_env"
+    # Obter porta real do Host da API Oficial
+    local porta_oficial=""
+    if [ -n "$container_id" ]; then
+      porta_oficial=$(docker port "$container_id" 6000/tcp 2>/dev/null | head -n 1 | awk -F: '{print $NF}' | tr -d '\r')
     fi
+    if [ -z "$porta_oficial" ] && [ -f "${compose_dir}/.env" ]; then
+      porta_oficial=$(grep -m1 '^PORT_APIOFICIAL=' "${compose_dir}/.env" 2>/dev/null | cut -d '=' -f2- | tr -d '\r')
+    fi
+    if [ -z "$porta_oficial" ] && [ -f "${compose_dir}/backend/.env" ]; then
+      porta_oficial=$(grep -m1 '^PORT_APIOFICIAL=' "${compose_dir}/backend/.env" 2>/dev/null | cut -d '=' -f2- | tr -d '\r')
+    fi
+    [ -z "$porta_oficial" ] && porta_oficial="${PORT_APIOFICIAL:-6000}"
 
     # Obter URL configurada
     local url_oficial="${subdominio_oficial:-Não configurada}"
@@ -10718,7 +10720,7 @@ instalar_api_oficial_docker() {
   # 1.2 Definir Porta Host para a API Oficial
   local sugestao_porta="${PORT_APIOFICIAL:-6000}"
   local porta_atual_uso=""
-  porta_atual_uso=$(proxima_porta_livre "$sugestao_porta")
+  porta_atual_uso=$(proxima_porta_livre "$sugestao_porta" "PORT_APIOFICIAL")
   if [ "$porta_atual_uso" != "$sugestao_porta" ]; then
     local container_atual
     container_atual=$(docker ps --format '{{.Names}}' | grep -E "^${emp}_apioficial" | head -n 1)
@@ -10762,7 +10764,19 @@ instalar_api_oficial_docker() {
   esac
   printf "${GREEN} >> URL definida: ${BLUE}%s${WHITE}\n\n" "$url_escolhida"
 
-  # 1.4 Garantir banco de dados no PostgreSQL
+  # 1.4 Obter credenciais reais do PostgreSQL a partir do backend/.env ou .env
+  local db_pass_real=""
+  local db_user_real="${emp}"
+  if [ -f "${compose_dir}/backend/.env" ]; then
+    db_pass_real=$(grep -m1 '^DB_PASS=' "${compose_dir}/backend/.env" 2>/dev/null | cut -d '=' -f2- | tr -d '\r"' || true)
+    local u_real
+    u_real=$(grep -m1 '^DB_USER=' "${compose_dir}/backend/.env" 2>/dev/null | cut -d '=' -f2- | tr -d '\r"' || true)
+    [ -n "$u_real" ] && db_user_real="$u_real"
+  elif [ -f "${compose_dir}/.env" ]; then
+    db_pass_real=$(grep -m1 '^DB_PASS=' "${compose_dir}/.env" 2>/dev/null | cut -d '=' -f2- | tr -d '\r"' || true)
+  fi
+  [ -z "$db_pass_real" ] && db_pass_real="${senha_deploy:-Acertitech13@}"
+
   printf "${PURPLE} >> Verificando e criando o banco de dados 'api_oficial' no PostgreSQL...${WHITE}\n"
   local pg_c
   pg_c=$(docker ps --format '{{.Names}}' | grep -E "^${emp}_postgres" | head -n 1)
@@ -10770,12 +10784,13 @@ instalar_api_oficial_docker() {
   [ -z "$pg_c" ] && pg_c=$(docker ps --format '{{.Names}}' | grep -E "postgres" | head -n 1)
 
   if [ -n "$pg_c" ]; then
-    docker exec -e PGPASSWORD="${senha_deploy:-Acertitech13@}" "$pg_c" psql -U "${emp}" -d "${emp}" -tc "SELECT 1 FROM pg_database WHERE datname = 'api_oficial'" 2>/dev/null | grep -q 1 || \
-      docker exec -e PGPASSWORD="${senha_deploy:-Acertitech13@}" "$pg_c" psql -U "${emp}" -d "${emp}" -c "CREATE DATABASE api_oficial;" 2>/dev/null || \
-      docker exec -e PGPASSWORD="${senha_deploy:-Acertitech13@}" "$pg_c" psql -U "${emp}" -d postgres -c "CREATE DATABASE api_oficial;" 2>/dev/null || true
-    printf "${GREEN} >> Banco 'api_oficial' pronto no contêiner PostgreSQL (${pg_c})!${WHITE}\n"
+    docker exec -e PGPASSWORD="${db_pass_real}" "$pg_c" psql -U "${db_user_real}" -d postgres -tc "SELECT 1 FROM pg_database WHERE datname = 'api_oficial'" 2>/dev/null | grep -q 1 || \
+      docker exec -e PGPASSWORD="${db_pass_real}" "$pg_c" psql -U "${db_user_real}" -d postgres -c "CREATE DATABASE api_oficial;" 2>/dev/null || \
+      docker exec -e PGPASSWORD="${db_pass_real}" "$pg_c" psql -U "${db_user_real}" -d "${emp}" -c "CREATE DATABASE api_oficial;" 2>/dev/null || \
+      docker exec "$pg_c" psql -U postgres -c "CREATE DATABASE api_oficial;" 2>/dev/null || true
+    printf "${GREEN} >> Banco 'api_oficial' verificado no contêiner PostgreSQL (${pg_c})!${WHITE}\n"
   elif command -v psql >/dev/null 2>&1; then
-    PGPASSWORD="${senha_deploy:-Acertitech13@}" psql -h 127.0.0.1 -p "${PORT_DB:-5432}" -U "${emp}" -d postgres -c "CREATE DATABASE api_oficial;" 2>/dev/null || true
+    PGPASSWORD="${db_pass_real}" psql -h 127.0.0.1 -p "${PORT_DB:-5432}" -U "${db_user_real}" -d postgres -c "CREATE DATABASE api_oficial;" 2>/dev/null || true
     printf "${GREEN} >> Banco 'api_oficial' configurado via PostgreSQL local!${WHITE}\n"
   fi
 
@@ -10805,17 +10820,17 @@ EOF_API_DF
   # 1.6 Configurar arquivo .env da API Oficial
   printf "${WHITE} >> Configurando arquivo .env da API Oficial...${WHITE}\n"
   cat <<EOF > "${compose_dir}/api_oficial/.env"
-DATABASE_LINK=postgresql://${emp}:${senha_deploy:-Acertitech13@}@postgres:5432/api_oficial?schema=public
+DATABASE_LINK=postgresql://${db_user_real}:${db_pass_real}@postgres:5432/api_oficial?schema=public
 DATABASE_URL=postgres
 DATABASE_PORT=5432
-DATABASE_USER=${emp}
-DATABASE_PASSWORD=${senha_deploy:-Acertitech13@}
+DATABASE_USER=${db_user_real}
+DATABASE_PASSWORD=${db_pass_real}
 DATABASE_NAME=api_oficial
 PORT=6000
 TOKEN_ADMIN=adminpro
 NAME_ADMIN=SetupAutomatizado
 EMAIL_ADMIN=admin@amanda.com.br
-PASSWORD_ADMIN=${senha_deploy:-Acertitech13@}
+PASSWORD_ADMIN=${db_pass_real}
 JWT_SECRET=${jwt_secret:-kZaOTd+YZpjRUyyuQUpigJaEMk4vcW4YOymKPZX0Ts8=}
 JWT_REFRESH_SECRET=${jwt_refresh_secret:-kZaOTd+YZpjRUyyuQUpigJaEMk4vcW4YOymKPZX0Ts8=}
 URL_BACKEND_MULT100=http://backend:8080
@@ -10830,13 +10845,14 @@ EOF
   # 1.7 Integrar api_oficial no docker-compose.yml
   if [ -f "${compose_dir}/docker-compose.yml" ]; then
     printf "${PURPLE} >> Integrando serviço api_oficial no docker-compose.yml...${WHITE}\n"
-    python3 - "${compose_dir}/docker-compose.yml" "${emp}" "${porta_escolhida}" "${senha_deploy:-Acertitech13@}" << 'PYINJECT'
+    python3 - "${compose_dir}/docker-compose.yml" "${emp}" "${porta_escolhida}" "${db_pass_real}" "${db_user_real}" << 'PYINJECT'
 import sys, re
 
 compose_file = sys.argv[1]
 proj = sys.argv[2]
 port = sys.argv[3]
 db_pass = sys.argv[4]
+db_user = sys.argv[5] if len(sys.argv) > 5 else proj
 
 with open(compose_file, "r", encoding="utf-8") as f:
     content = f.read()
@@ -10867,10 +10883,10 @@ api_block = f"""
         condition: service_healthy
     environment:
       PORT: 6000
-      DATABASE_LINK: postgresql://{proj}:{db_pass}@postgres:5432/api_oficial?schema=public
+      DATABASE_LINK: postgresql://{db_user}:{db_pass}@postgres:5432/api_oficial?schema=public
       DATABASE_URL: postgres
       DATABASE_PORT: 5432
-      DATABASE_USER: {proj}
+      DATABASE_USER: {db_user}
       DATABASE_PASSWORD: {db_pass}
       DATABASE_NAME: api_oficial
       NAME_ADMIN: SetupAutomatizado
@@ -11052,6 +11068,14 @@ status_api_oficial() {
   local app_dir="/home/deploy/${emp}"
   [ -z "$compose_dir" ] && compose_dir=$(localizar_diretorio_compose "${app_dir}")
 
+  local c_oficial
+  c_oficial=$(mf_localizar_container_apioficial "$emp")
+  if [ -n "$c_oficial" ]; then
+    local p_dock
+    p_dock=$(docker port "$c_oficial" 6000/tcp 2>/dev/null | head -n 1 | awk -F: '{print $NF}' | tr -d '\r')
+    [ -n "$p_dock" ] && porta="$p_dock"
+  fi
+
   banner
   printf "   ${PURPLE}╔══════════════════════════════════════════════════════════════╗${WHITE}\n"
   printf "   ${PURPLE}║${WHITE}             STATUS E SAÚDE DA API OFICIAL                    ${PURPLE}║${WHITE}\n"
@@ -11061,8 +11085,6 @@ status_api_oficial() {
   printf "   ${WHITE}URL configurada:   ${CYAN}%s${WHITE}\n\n" "$url"
 
   printf "   ${CYAN}━━ [1] Status do Contêiner Docker ━━${WHITE}\n"
-  local c_oficial
-  c_oficial=$(mf_localizar_container_apioficial "$emp")
   if [ -n "$c_oficial" ]; then
     docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" | grep -E "$c_oficial|NAMES" || docker ps
   else
@@ -11088,11 +11110,12 @@ status_api_oficial() {
 
   printf "   ${CYAN}━━ [3] Teste HTTP Local ━━${WHITE}\n"
   local http_code
-  http_code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 "http://127.0.0.1:${porta}/" 2>/dev/null || echo "000")
-  if [ "$http_code" != "000" ]; then
+  http_code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 "http://127.0.0.1:${porta}/" 2>/dev/null)
+  http_code="${http_code:-000}"
+  if [ "$http_code" != "000" ] && [ "$http_code" != "000000" ] && [ -n "$http_code" ]; then
     printf "   ${GREEN}✔ Resposta HTTP recebida: Código ${http_code}${WHITE}\n"
   else
-    printf "   ${YELLOW}⚠ Sem resposta HTTP direta em http://127.0.0.1:${porta}/ (serviço pode estar inicializando).${WHITE}\n"
+    printf "   ${YELLOW}⚠ Sem resposta HTTP direta em http://127.0.0.1:${porta}/ (contêiner inativo ou inicializando).${WHITE}\n"
   fi
   echo
 
