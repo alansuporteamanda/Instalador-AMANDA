@@ -12,10 +12,10 @@ RABBIT_USER="${RABBIT_USER:-}"
 RABBIT_PASS="${RABBIT_PASS:-}"
 CREDS_SOURCE=""
 
-info() { printf "\033[1;34m[INFO]\033[0m %s\n" "$1"; }
-success() { printf "\033[1;32m[SUCCESS]\033[0m %s\n" "$1"; }
-warn() { printf "\033[1;33m[WARN]\033[0m %s\n" "$1"; }
-error() { printf "\033[1;31m[ERROR]\033[0m %s\n" "$1"; exit 1; }
+info() { printf "${BLUE:-\033[1;94m}[INFO]${WHITE:-\033[0m} %s\n" "$1"; }
+success() { printf "${GREEN:-\033[1;92m}[SUCCESS]${WHITE:-\033[0m} %s\n" "$1"; }
+warn() { printf "${YELLOW:-\033[1;93m}[WARN]${WHITE:-\033[0m} %s\n" "$1"; }
+error() { printf "${RED:-\033[1;91m}[ERROR]${WHITE:-\033[0m} %s\n" "$1"; exit 1; }
 
 generate_password() {
   tr -dc 'A-Za-z0-9' </dev/urandom | head -c 24

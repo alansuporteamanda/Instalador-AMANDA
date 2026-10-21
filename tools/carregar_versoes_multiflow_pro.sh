@@ -79,15 +79,22 @@ mf_exibir_rotulo_versao_menu() {
 # ================================================================
 selecionar_canal_branch_amanda() {
   local motivo="${1:-a atualização}"
+  if [ -z "${PURPLE:-}" ]; then
+    if [ "${COLORTERM:-}" = "truecolor" ] || [ "${COLORTERM:-}" = "24bit" ] || [ -n "${WT_SESSION:-}" ] || [[ "${TERM:-}" =~ (xterm|256color|screen|tmux|linux|alacritty|kitty) ]]; then
+      PURPLE='\033[38;2;139;92;246m'; BLUE='\033[1;38;2;167;139;250m'; GREEN='\033[1;38;2;74;222;128m'; WHITE='\033[1;38;2;255;255;255m'; RED='\033[1;38;2;248;113;113m'; YELLOW='\033[1;38;2;250;204;21m'; CYAN='\033[1;38;2;56;189;248m'
+    else
+      PURPLE='\033[38;5;99m'; BLUE='\033[1;94m'; GREEN='\033[1;92m'; WHITE='\033[1;97m'; RED='\033[1;91m'; YELLOW='\033[1;93m'; CYAN='\033[1;96m'
+    fi
+  fi
   banner 2>/dev/null || true
-  printf "   \033[1;35m╔══════════════════════════════════════════════════════════════╗\033[0m\n"
-  printf "   \033[1;35m║\033[0m           SELEÇÃO DE CANAL DE VERSÃO / BRANCH AMANDA         \033[1;35m║\033[0m\n"
-  printf "   \033[1;35m╚══════════════════════════════════════════════════════════════╝\033[0m\n\n"
-  printf "   Escolha qual versão/branch você deseja utilizar para %s:\n\n" "${motivo}"
-  printf "   [\033[1;34m1\033[0m] \033[1;32mVersão Estável (main)\033[0m - Recomendada para Produção / Clientes\n"
-  printf "   [\033[1;34m2\033[0m] \033[1;33mVersão de Desenvolvimento (davi-alteracoes)\033[0m - Recursos recentes (GLPI, correções)\n"
-  printf "   [\033[1;34m3\033[0m] \033[1;35mVersão de Desenvolvimento (alan-alteracoes)\033[0m - Recursos em homologação\n"
-  printf "   [\033[1;34m4\033[0m] \033[1;36mPersonalizada\033[0m - Digitar o nome de outra branch específica\n\n"
+  printf "   ${PURPLE}╔══════════════════════════════════════════════════════════════╗${WHITE}\n"
+  printf "   ${PURPLE}║${WHITE}           SELEÇÃO DE CANAL DE VERSÃO / BRANCH AMANDA         ${PURPLE}║${WHITE}\n"
+  printf "   ${PURPLE}╚══════════════════════════════════════════════════════════════╝${WHITE}\n\n"
+  printf "   ${WHITE}Escolha qual versão/branch você deseja utilizar para %s:\n\n" "${motivo}"
+  printf "   [${BLUE}1${WHITE}] ${GREEN}Versão Estável (main)${WHITE} - Recomendada para Produção / Clientes\n"
+  printf "   [${BLUE}2${WHITE}] ${YELLOW}Versão de Desenvolvimento (davi-alteracoes)${WHITE} - Recursos recentes (GLPI, correções)\n"
+  printf "   [${BLUE}3${WHITE}] ${PURPLE}Versão de Desenvolvimento (alan-alteracoes)${WHITE} - Recursos em homologação\n"
+  printf "   [${BLUE}4${WHITE}] ${CYAN}Personalizada${WHITE} - Digitar o nome de outra branch específica\n\n"
   printf "   Digite a opção desejada [1-4] (Padrão: 1): "
   read -r opt_branch
   opt_branch="${opt_branch:-1}"
@@ -118,7 +125,7 @@ selecionar_canal_branch_amanda() {
     echo "BRANCH_AMANDA_ESCOLHIDA=\"${BRANCH_AMANDA_ESCOLHIDA}\"" >> "/root/VARIAVEIS_INSTALACAO_INSTANCIA_${empresa}"
   fi
 
-  printf "\n   \033[1;32m>> Canal selecionado: \033[1;34m%s\033[0m\n\n" "${BRANCH_AMANDA_ESCOLHIDA}"
+  printf "\n   ${GREEN}>> Canal selecionado: ${BLUE}%s${WHITE}\n\n" "${BRANCH_AMANDA_ESCOLHIDA}"
   sleep 1
 }
 

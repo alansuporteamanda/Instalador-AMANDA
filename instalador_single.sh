@@ -2,26 +2,34 @@
 _mf_baileys_tools="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/tools/baileys_hineken_package_json.sh"
 [ -f "$_mf_baileys_tools" ] && . "$_mf_baileys_tools"
 
-# Cores do Tema Oficial AMANDA (Roxo Autêntico #8B5CF6 / #7C3AED / 256-cores #875fff)
-# Evita o tom rosa/fúcsia gerado pelo código ANSI legado \033[1;35m
+# Cores do Tema Oficial AMANDA (Brilhantes e de alto contraste em fundos escuros/pretos)
+# Evita o tom escuro/preto gerado pelo código ANSI legado e garante máxima visibilidade no terminal
 if [ "${COLORTERM:-}" = "truecolor" ] || [ "${COLORTERM:-}" = "24bit" ] || [ -n "${WT_SESSION:-}" ] || [[ "${TERM:-}" =~ (xterm|256color|screen|tmux|linux|alacritty|kitty) ]]; then
   PURPLE='\033[38;2;139;92;246m' # Roxo Luminoso AMANDA (#8B5CF6)
   purple='\033[38;2;139;92;246m'
-  BLUE='\033[1;38;2;139;92;246m' # Destaques e números do menu em Roxo Bold
-  MAGENTA='\033[38;2;124;58;237m' # Roxo Real Intenso (#7C3AED)
+  BLUE='\033[1;38;2;167;139;250m' # Lilás/Roxo Claro para números e destaques (#A78BFA)
+  MAGENTA='\033[38;2;192;132;252m' # Roxo Real Claro (#C084FC)
   ROXO='\033[38;2;139;92;246m'
+  GREEN='\033[1;38;2;74;222;128m'   # Verde Esmeralda Luminoso (#4ADE80 - ultra legível no fundo preto)
+  WHITE='\033[1;38;2;255;255;255m' # Branco Puro Brilhante (#FFFFFF)
+  RED='\033[1;38;2;248;113;113m'   # Vermelho Coral Claro (#F87171 - legível e nítido)
+  YELLOW='\033[1;38;2;250;204;21m'  # Amarelo Ouro Vivo (#FACC15 - nunca marrom/preto)
+  CYAN='\033[1;38;2;56;189;248m'    # Ciano Céu Luminoso (#38BDF8)
 else
   PURPLE='\033[38;5;99m' # 256-cores: Roxo #875fff puro
   purple='\033[38;5;99m'
-  BLUE='\033[1;38;5;99m'
-  MAGENTA='\033[38;5;93m'
+  BLUE='\033[1;94m'      # High Intensity Light Blue
+  MAGENTA='\033[1;95m'   # High Intensity Light Magenta
   ROXO='\033[38;5;99m'
+  GREEN='\033[1;92m'     # High Intensity Light Green (verde vivo)
+  WHITE='\033[1;97m'     # High Intensity Bright White (branco puro)
+  RED='\033[1;91m'       # High Intensity Light Red (vermelho vivo)
+  YELLOW='\033[1;93m'    # High Intensity Light Yellow (amarelo vivo brilhante)
+  CYAN='\033[1;96m'      # High Intensity Light Cyan (ciano vivo)
 fi
-GREEN='\033[1;32m'
-WHITE='\033[1;37m'
-RED='\033[1;31m'
-YELLOW='\033[1;33m'
-CYAN='\033[1;36m'
+NC='\033[0m'
+RESET='\033[0m'
+export PURPLE purple BLUE MAGENTA ROXO GREEN WHITE RED YELLOW CYAN NC RESET
 
 # Variaveis Padrão
 ARCH=$(uname -m)
@@ -10644,7 +10652,7 @@ menu_gerenciar_api_oficial() {
     printf "   ${WHITE}Status Atual:    %b\n" "$status_texto"
     printf "   ${WHITE}Modo:            ${CYAN}%s${WHITE}\n" "$modo_execucao"
     printf "   ${WHITE}Porta HTTP:      ${YELLOW}%s${WHITE}\n" "$porta_oficial"
-    printf "   ${WHITE}URL Configurada: ${YELLOW}%s${WHITE}\n\n" "$url_oficial"
+    printf "   ${WHITE}URL Configurada: ${CYAN}%s${WHITE}\n\n" "$url_oficial"
     printf "   ${WHITE}Selecione a ação desejada:\n"
     printf "     [${BLUE}1${WHITE}] Instalar API Oficial (Contêiner Docker - Padrão AMANDA)\n"
     printf "     [${BLUE}2${WHITE}] Atualizar API Oficial (Contêiner Docker)\n"
@@ -11050,7 +11058,7 @@ status_api_oficial() {
   printf "   ${PURPLE}╚══════════════════════════════════════════════════════════════╝${WHITE}\n\n"
   printf "   ${WHITE}Instância:         ${GREEN}%s${WHITE}\n" "$emp"
   printf "   ${WHITE}Porta configurada: ${YELLOW}%s${WHITE}\n" "$porta"
-  printf "   ${WHITE}URL configurada:   ${YELLOW}%s${WHITE}\n\n" "$url"
+  printf "   ${WHITE}URL configurada:   ${CYAN}%s${WHITE}\n\n" "$url"
 
   printf "   ${CYAN}━━ [1] Status do Contêiner Docker ━━${WHITE}\n"
   local c_oficial

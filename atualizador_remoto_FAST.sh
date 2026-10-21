@@ -2,12 +2,33 @@
 _mf_baileys_tools="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/tools/baileys_hineken_package_json.sh"
 [ -f "$_mf_baileys_tools" ] && . "$_mf_baileys_tools"
 
-GREEN='\033[1;32m'
-BLUE='\033[38;2;139;92;246m'
-PURPLE='\033[38;2;139;92;246m'
-WHITE='\033[1;37m'
-RED='\033[1;31m'
-YELLOW='\033[1;33m'
+if [ -z "${PURPLE:-}" ]; then
+  if [ "${COLORTERM:-}" = "truecolor" ] || [ "${COLORTERM:-}" = "24bit" ] || [ -n "${WT_SESSION:-}" ] || [[ "${TERM:-}" =~ (xterm|256color|screen|tmux|linux|alacritty|kitty) ]]; then
+    PURPLE='\033[38;2;139;92;246m'
+    purple='\033[38;2;139;92;246m'
+    BLUE='\033[1;38;2;167;139;250m'
+    MAGENTA='\033[38;2;192;132;252m'
+    ROXO='\033[38;2;139;92;246m'
+    GREEN='\033[1;38;2;74;222;128m'
+    WHITE='\033[1;38;2;255;255;255m'
+    RED='\033[1;38;2;248;113;113m'
+    YELLOW='\033[1;38;2;250;204;21m'
+    CYAN='\033[1;38;2;56;189;248m'
+  else
+    PURPLE='\033[38;5;99m'
+    purple='\033[38;5;99m'
+    BLUE='\033[1;94m'
+    MAGENTA='\033[1;95m'
+    ROXO='\033[38;5;99m'
+    GREEN='\033[1;92m'
+    WHITE='\033[1;97m'
+    RED='\033[1;91m'
+    YELLOW='\033[1;93m'
+    CYAN='\033[1;96m'
+  fi
+  NC='\033[0m'
+  RESET='\033[0m'
+fi
 
 # Variaveis Padrão
 ARCH=$(uname -m)
