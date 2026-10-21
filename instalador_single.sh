@@ -10770,10 +10770,12 @@ instalar_api_oficial_docker() {
   printf "${WHITE} >> Informe a URL ou Subdomínio da API Oficial [Padrão: ${YELLOW}${sugestao_url}${WHITE}]: \n"
   read -r url_escolhida
   url_escolhida="${url_escolhida:-$sugestao_url}"
+  url_escolhida=$(echo "$url_escolhida" | tr -d '"\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
   case "$url_escolhida" in
     http://*|https://*) ;;
     *) url_escolhida="https://${url_escolhida}" ;;
   esac
+  url_escolhida="${url_escolhida%/}"
   printf "${GREEN} >> URL definida: ${BLUE}%s${WHITE}\n\n" "$url_escolhida"
 
   # 1.4 Obter credenciais reais do PostgreSQL a partir do backend/.env ou .env
@@ -10918,6 +10920,19 @@ api_block = f"""
       - {net_name}
 """
 
+# Injetar URL_API_OFICIAL no servico backend se houver bloco environment
+be_match = re.search(r'([ ]{2}backend:\n(?:[ ]{4,}.*\n)*)', content)
+if be_match:
+    be_block = be_match.group(1)
+    if "environment:" in be_block and "URL_API_OFICIAL:" not in be_block:
+        new_be_block = re.sub(
+            r'([ ]{4}environment:\n)',
+            r'\1      URL_API_OFICIAL: ${URL_API_OFICIAL:-' + url_escolhida + r'}\n      API_OFICIAL_URL: ${URL_API_OFICIAL:-' + url_escolhida + r'}\n      USE_WHATSAPP_OFICIAL: "true"\n      TOKEN_API_OFICIAL: "adminpro"\n',
+            be_block,
+            count=1
+        )
+        content = content.replace(be_block, new_be_block)
+
 if re.search(r'\nvolumes:\s*\n', content):
     content = re.sub(r'\nvolumes:\s*\n', f"{api_block}\nvolumes:\n", content, count=1)
 else:
@@ -10930,18 +10945,26 @@ PYINJECT
 
   # 1.8 Sincronizar variáveis no .env da AMANDA
   printf "${WHITE} >> Conectando API Oficial ao backend da AMANDA...${WHITE}\n"
-  sincronizar_porta_env "PORT_APIOFICIAL" "${porta_escolhida}" "${compose_dir}/.env"
-  [ -f "${compose_dir}/backend/.env" ] && sincronizar_porta_env "PORT_APIOFICIAL" "${porta_escolhida}" "${compose_dir}/backend/.env"
-
-  sed -i "s|^URL_API_OFICIAL=.*|URL_API_OFICIAL=${url_escolhida}|" "${compose_dir}/.env" 2>/dev/null || echo "URL_API_OFICIAL=${url_escolhida}" >> "${compose_dir}/.env"
-  sed -i "s|^USE_WHATSAPP_OFICIAL=.*|USE_WHATSAPP_OFICIAL=true|" "${compose_dir}/.env" 2>/dev/null || echo "USE_WHATSAPP_OFICIAL=true" >> "${compose_dir}/.env"
-  sed -i "s|^TOKEN_API_OFICIAL=.*|TOKEN_API_OFICIAL=adminpro|" "${compose_dir}/.env" 2>/dev/null || echo "TOKEN_API_OFICIAL=adminpro" >> "${compose_dir}/.env"
-
-  if [ -f "${compose_dir}/backend/.env" ]; then
-    sed -i "s|^URL_API_OFICIAL=.*|URL_API_OFICIAL=${url_escolhida}|" "${compose_dir}/backend/.env" 2>/dev/null || echo "URL_API_OFICIAL=${url_escolhida}" >> "${compose_dir}/backend/.env"
-    sed -i "s|^USE_WHATSAPP_OFICIAL=.*|USE_WHATSAPP_OFICIAL=true|" "${compose_dir}/backend/.env" 2>/dev/null || echo "USE_WHATSAPP_OFICIAL=true" >> "${compose_dir}/backend/.env"
-    sed -i "s|^TOKEN_API_OFICIAL=.*|TOKEN_API_OFICIAL=adminpro|" "${compose_dir}/backend/.env" 2>/dev/null || echo "TOKEN_API_OFICIAL=adminpro" >> "${compose_dir}/backend/.env"
-  fi
+  local env_files=(
+    "${compose_dir}/.env"
+    "${compose_dir}/backend/.env"
+    "/home/deploy/${emp}/.env"
+    "/home/deploy/${emp}/backend/.env"
+    "/home/deploy/${emp}/${emp}/.env"
+    "/home/deploy/${emp}/${emp}/backend/.env"
+  )
+  for env_f in "${env_files[@]}"; do
+    if [ -f "$env_f" ]; then
+      sincronizar_porta_env "PORT_APIOFICIAL" "${porta_escolhida}" "$env_f"
+      sed -i "s|^URL_API_OFICIAL=.*|URL_API_OFICIAL=${url_escolhida}|" "$env_f" 2>/dev/null || echo "URL_API_OFICIAL=${url_escolhida}" >> "$env_f"
+      sed -i "s|^API_OFICIAL_URL=.*|API_OFICIAL_URL=${url_escolhida}|" "$env_f" 2>/dev/null || echo "API_OFICIAL_URL=${url_escolhida}" >> "$env_f"
+      sed -i "s|^USE_WHATSAPP_OFICIAL=.*|USE_WHATSAPP_OFICIAL=true|" "$env_f" 2>/dev/null || echo "USE_WHATSAPP_OFICIAL=true" >> "$env_f"
+      sed -i "s|^TOKEN_API_OFICIAL=.*|TOKEN_API_OFICIAL=adminpro|" "$env_f" 2>/dev/null || echo "TOKEN_API_OFICIAL=adminpro" >> "$env_f"
+      sed -i "s|^API_OFICIAL_TOKEN=.*|API_OFICIAL_TOKEN=adminpro|" "$env_f" 2>/dev/null || echo "API_OFICIAL_TOKEN=adminpro" >> "$env_f"
+      chown deploy:deploy "$env_f" 2>/dev/null || true
+      chmod 600 "$env_f" 2>/dev/null || true
+    fi
+  done
 
   if [ -n "${ARQUIVO_VARIAVEIS_USADO:-}" ] && [ -f "${ARQUIVO_VARIAVEIS_USADO}" ]; then
     sed -i "s|^subdominio_oficial=.*|subdominio_oficial=${url_escolhida}|" "${ARQUIVO_VARIAVEIS_USADO}" 2>/dev/null || echo "subdominio_oficial=${url_escolhida}" >> "${ARQUIVO_VARIAVEIS_USADO}"
@@ -10967,8 +10990,11 @@ PYINJECT
     printf "${GREEN} >> Migrações aplicadas com sucesso!${WHITE}\n"
   fi
 
-  # 1.11 Reiniciar Backend AMANDA para aplicar conexão
-  printf "${WHITE} >> Reiniciando backend AMANDA para estabelecer conexão com a API Oficial...${WHITE}\n"
+  # 1.11 Recriar Backend AMANDA para aplicar novas variáveis de ambiente
+  printf "${WHITE} >> Recriando e reiniciando backend AMANDA para estabelecer conexão com a API Oficial...${WHITE}\n"
+  if [ -f "${compose_dir}/docker-compose.yml" ]; then
+    (cd "${compose_dir}" && docker compose -p "${emp}" up -d --force-recreate backend 2>/dev/null || true)
+  fi
   local be_c
   be_c=$(docker ps --format '{{.Names}}' | grep -E "^${emp}_backend" | head -n 1)
   [ -n "$be_c" ] && docker restart "$be_c" 2>/dev/null || true
@@ -11162,6 +11188,19 @@ status_api_oficial() {
     printf "   ${WHITE}  (Use a Opção [7] no menu para sincronizar com o backend).${WHITE}\n"
   fi
 
+  local be_c
+  be_c=$(docker ps --format '{{.Names}}' | grep -E "^${emp}_backend" | head -n 1)
+  if [ -n "$be_c" ]; then
+    local url_be_ativa
+    url_be_ativa=$(docker exec "$be_c" printenv URL_API_OFICIAL 2>/dev/null || true)
+    if [ -n "$url_be_ativa" ]; then
+      printf "   ${GREEN}✔ URL no Backend (em execução): ${CYAN}%s${WHITE}\n" "$url_be_ativa"
+    else
+      printf "   ${RED}✘ URL_API_OFICIAL NÃO carregada no contêiner do Backend!${WHITE}\n"
+      printf "   ${YELLOW}  (Execute a Opção [7] no menu para sincronizar e recriar o backend).${WHITE}\n"
+    fi
+  fi
+
   echo
   printf "${WHITE}>> Pressione Enter para voltar ao menu...${WHITE}\n"
   read -r
@@ -11262,21 +11301,65 @@ sincronizar_integracao_backend_api_oficial() {
     read -r url
   fi
 
+  # Sanitizar URL
+  url=$(echo "$url" | tr -d '"\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+  case "$url" in
+    http://*|https://*) ;;
+    *) url="https://${url}" ;;
+  esac
+  url="${url%/}"
+
   printf "${WHITE} >> Atualizando variáveis de ambiente no Backend AMANDA...${WHITE}\n"
-  sincronizar_porta_env "PORT_APIOFICIAL" "${porta}" "${compose_dir}/.env"
-  [ -f "${compose_dir}/backend/.env" ] && sincronizar_porta_env "PORT_APIOFICIAL" "${porta}" "${compose_dir}/backend/.env"
+  local env_files=(
+    "${compose_dir}/.env"
+    "${compose_dir}/backend/.env"
+    "/home/deploy/${emp}/.env"
+    "/home/deploy/${emp}/backend/.env"
+    "/home/deploy/${emp}/${emp}/.env"
+    "/home/deploy/${emp}/${emp}/backend/.env"
+  )
+  for env_f in "${env_files[@]}"; do
+    if [ -f "$env_f" ]; then
+      sincronizar_porta_env "PORT_APIOFICIAL" "${porta}" "$env_f"
+      sed -i "s|^URL_API_OFICIAL=.*|URL_API_OFICIAL=${url}|" "$env_f" 2>/dev/null || echo "URL_API_OFICIAL=${url}" >> "$env_f"
+      sed -i "s|^API_OFICIAL_URL=.*|API_OFICIAL_URL=${url}|" "$env_f" 2>/dev/null || echo "API_OFICIAL_URL=${url}" >> "$env_f"
+      sed -i "s|^USE_WHATSAPP_OFICIAL=.*|USE_WHATSAPP_OFICIAL=true|" "$env_f" 2>/dev/null || echo "USE_WHATSAPP_OFICIAL=true" >> "$env_f"
+      sed -i "s|^TOKEN_API_OFICIAL=.*|TOKEN_API_OFICIAL=adminpro|" "$env_f" 2>/dev/null || echo "TOKEN_API_OFICIAL=adminpro" >> "$env_f"
+      sed -i "s|^API_OFICIAL_TOKEN=.*|API_OFICIAL_TOKEN=adminpro|" "$env_f" 2>/dev/null || echo "API_OFICIAL_TOKEN=adminpro" >> "$env_f"
+      chown deploy:deploy "$env_f" 2>/dev/null || true
+      chmod 600 "$env_f" 2>/dev/null || true
+    fi
+  done
 
-  sed -i "s|^URL_API_OFICIAL=.*|URL_API_OFICIAL=${url}|" "${compose_dir}/.env" 2>/dev/null || echo "URL_API_OFICIAL=${url}" >> "${compose_dir}/.env"
-  sed -i "s|^USE_WHATSAPP_OFICIAL=.*|USE_WHATSAPP_OFICIAL=true|" "${compose_dir}/.env" 2>/dev/null || echo "USE_WHATSAPP_OFICIAL=true" >> "${compose_dir}/.env"
-  sed -i "s|^TOKEN_API_OFICIAL=.*|TOKEN_API_OFICIAL=adminpro|" "${compose_dir}/.env" 2>/dev/null || echo "TOKEN_API_OFICIAL=adminpro" >> "${compose_dir}/.env"
+  # Injetar variáveis de ambiente no serviço backend dentro do docker-compose.yml se aplicável
+  if [ -f "${compose_dir}/docker-compose.yml" ]; then
+    python3 - "${compose_dir}/docker-compose.yml" "${url}" << 'PYEOF'
+import sys, re
+compose_file = sys.argv[1]
+url_oficial = sys.argv[2]
+with open(compose_file, "r", encoding="utf-8") as f:
+    content = f.read()
 
-  if [ -f "${compose_dir}/backend/.env" ]; then
-    sed -i "s|^URL_API_OFICIAL=.*|URL_API_OFICIAL=${url}|" "${compose_dir}/backend/.env" 2>/dev/null || echo "URL_API_OFICIAL=${url}" >> "${compose_dir}/backend/.env"
-    sed -i "s|^USE_WHATSAPP_OFICIAL=.*|USE_WHATSAPP_OFICIAL=true|" "${compose_dir}/backend/.env" 2>/dev/null || echo "USE_WHATSAPP_OFICIAL=true" >> "${compose_dir}/backend/.env"
-    sed -i "s|^TOKEN_API_OFICIAL=.*|TOKEN_API_OFICIAL=adminpro|" "${compose_dir}/backend/.env" 2>/dev/null || echo "TOKEN_API_OFICIAL=adminpro" >> "${compose_dir}/backend/.env"
+be_match = re.search(r'([ ]{2}backend:\n(?:[ ]{4,}.*\n)*)', content)
+if be_match:
+    be_block = be_match.group(1)
+    if "environment:" in be_block and "URL_API_OFICIAL:" not in be_block:
+        new_be_block = re.sub(
+            r'([ ]{4}environment:\n)',
+            r'\1      URL_API_OFICIAL: ${URL_API_OFICIAL:-' + url_oficial + r'}\n      API_OFICIAL_URL: ${URL_API_OFICIAL:-' + url_oficial + r'}\n      USE_WHATSAPP_OFICIAL: "true"\n      TOKEN_API_OFICIAL: "adminpro"\n',
+            be_block,
+            count=1
+        )
+        content = content.replace(be_block, new_be_block)
+        with open(compose_file, "w", encoding="utf-8") as f:
+            f.write(content)
+PYEOF
   fi
 
-  printf "${WHITE} >> Reiniciando contêiner do Backend AMANDA...${WHITE}\n"
+  printf "${WHITE} >> Recriando e reiniciando contêiner do Backend AMANDA para aplicar novas variáveis...${WHITE}\n"
+  if [ -f "${compose_dir}/docker-compose.yml" ]; then
+    (cd "${compose_dir}" && docker compose -p "${emp}" up -d --force-recreate backend 2>/dev/null || true)
+  fi
   local be_c
   be_c=$(docker ps --format '{{.Names}}' | grep -E "^${emp}_backend" | head -n 1)
   [ -n "$be_c" ] && docker restart "$be_c" 2>/dev/null || true
