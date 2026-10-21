@@ -10809,9 +10809,12 @@ instalar_api_oficial_docker() {
   # 1.5 Assegurar Dockerfile, compatibilidade CommonJS (@nestjs/mapped-types@2.0.5) e pastas
   mkdir -p "${compose_dir}/api_oficial/public"
   touch "${compose_dir}/api_oficial/public/.gitkeep"
-  if [ -f "${compose_dir}/api_oficial/package.json" ]; then
-    sed -i 's|"@nestjs/mapped-types": "[^"]*"|"@nestjs/mapped-types": "2.0.5"|g' "${compose_dir}/api_oficial/package.json" 2>/dev/null || true
-  fi
+  for p_pkg in "${compose_dir}/api_oficial/package.json" "/home/deploy/${emp}/api_oficial/package.json" "/home/deploy/${emp}/${emp}/api_oficial/package.json"; do
+    [ -f "$p_pkg" ] && sed -i 's|"@nestjs/mapped-types": "[^"]*"|"@nestjs/mapped-types": "2.0.5"|g' "$p_pkg" 2>/dev/null || true
+  done
+  for p_df in "${compose_dir}/api_oficial/Dockerfile" "/home/deploy/${emp}/api_oficial/Dockerfile" "/home/deploy/${emp}/${emp}/api_oficial/Dockerfile"; do
+    [ -f "$p_df" ] && sed -i 's|prisma@5.14.0|prisma@5.14.0 @nestjs/mapped-types@2.0.5|g' "$p_df" 2>/dev/null || true
+  done
   printf "${WHITE} >> Criando/atualizando Dockerfile da API Oficial (Node 20 + fix @nestjs/mapped-types CommonJS)...${WHITE}\n"
   cat << 'EOF_API_DF' > "${compose_dir}/api_oficial/Dockerfile"
 FROM node:20-alpine
